@@ -1,0 +1,32 @@
+# Секреты — никогда не в Git
+.env
+credentials.json
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+*.egg-info/
+dist/
+build/
+
+# Виртуальное окружение
+.venv/
+venv/
+env/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+
+# Claude Code
+.claude/
+
+# Мусорные файлы
+nul-
+
+# macOS
+.DS_Store

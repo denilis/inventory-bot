@@ -1,0 +1,16 @@
+services:
+  - type: worker
+    name: inventory-bot
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    envVars:
+      - key: BOT_TOKEN
+        sync: false
+      - key: SPREADSHEET_ID
+        sync: false
+      - key: DRIVE_FOLDER_ID
+        sync: false
+      - key: OPENAI_API_KEY
+        sync: false
+      - key: GOOGLE_CREDENTIALS_JSON
+        sync: false
