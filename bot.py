@@ -258,7 +258,7 @@ router = Router()
 @router.message(Command("start"))
 async def cmd_start(message: Message, state: FSMContext):
     await state.clear()
-    kb_rows = [inline_kb(SPORT_COMPLEXES, "complex").inline_keyboard]
+    kb_rows = list(inline_kb(SPORT_COMPLEXES, "complex").inline_keyboard)
     if DASHBOARD_URL:
         kb_rows.append([InlineKeyboardButton(text="📊 Открыть дашборд", url=DASHBOARD_URL)])
     await message.answer(
