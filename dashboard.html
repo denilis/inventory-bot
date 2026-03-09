@@ -1,0 +1,646 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>ТМЦ — Учёт оборудования</title>
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  :root {
+    --bg:      #1a1d23;
+    --surface: #242830;
+    --card:    #2e3340;
+    --border:  #3a3f4d;
+    --accent:  #4f8ef7;
+    --accent2: #2ecc71;
+    --warn:    #e67e22;
+    --danger:  #e74c3c;
+    --text:    #e8eaf0;
+    --muted:   #8890a0;
+    --radius:  8px;
+  }
+
+  body { background: var(--bg); color: var(--text); font-family: 'Segoe UI', system-ui, sans-serif; font-size: 14px; line-height: 1.5; }
+
+  /* ── Шапка ── */
+  .header { background: var(--surface); border-bottom: 1px solid var(--border); padding: 12px 20px; display: flex; align-items: center; gap: 16px; }
+  .header h1 { font-size: 16px; font-weight: 600; }
+  .header .subtitle { color: var(--muted); font-size: 12px; }
+  .header-right { margin-left: auto; display: flex; align-items: center; gap: 10px; }
+  .status-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--muted); display: inline-block; }
+  .status-dot.ok { background: var(--accent2); }
+  #statusText { font-size: 12px; color: var(--muted); }
+
+  /* ── Вкладки ── */
+  .tabs { display: flex; border-bottom: 1px solid var(--border); background: var(--surface); padding: 0 20px; }
+  .tab { padding: 12px 18px; cursor: pointer; color: var(--muted); font-size: 14px; border-bottom: 2px solid transparent; transition: color .15s, border-color .15s; white-space: nowrap; }
+  .tab:hover { color: var(--text); }
+  .tab.active { color: var(--accent); border-bottom-color: var(--accent); }
+
+  /* ── Контент ── */
+  .pane { display: none; padding: 20px; }
+  .pane.active { display: block; }
+
+  /* ── Фильтры ── */
+  .filters { display: flex; flex-wrap: wrap; gap: 10px; margin-bottom: 16px; align-items: flex-end; }
+  .filter-group { display: flex; flex-direction: column; gap: 4px; }
+  .filter-group label { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: .5px; }
+  .filter-group input, .filter-group select {
+    background: var(--card); border: 1px solid var(--border); color: var(--text);
+    padding: 7px 10px; border-radius: var(--radius); font-size: 13px; min-width: 140px;
+    outline: none; transition: border-color .15s;
+  }
+  .filter-group input:focus, .filter-group select:focus { border-color: var(--accent); }
+  .filters .btn-reset { align-self: flex-end; }
+
+  /* ── Кнопки ── */
+  .btn { padding: 8px 14px; border: none; border-radius: var(--radius); cursor: pointer; font-size: 13px; font-weight: 500; transition: opacity .15s, transform .1s; display: inline-flex; align-items: center; gap: 6px; }
+  .btn:hover { opacity: .85; }
+  .btn:active { transform: scale(.97); }
+  .btn-primary { background: var(--accent); color: #fff; }
+  .btn-success { background: var(--accent2); color: #fff; }
+  .btn-warn    { background: var(--warn); color: #fff; }
+  .btn-danger  { background: var(--danger); color: #fff; }
+  .btn-ghost   { background: var(--card); color: var(--text); border: 1px solid var(--border); }
+
+  /* ── Таблица ── */
+  .table-wrap { overflow-x: auto; border-radius: var(--radius); border: 1px solid var(--border); }
+  table { width: 100%; border-collapse: collapse; }
+  thead th { background: var(--card); padding: 10px 12px; text-align: left; font-size: 11px; text-transform: uppercase; letter-spacing: .5px; color: var(--muted); border-bottom: 1px solid var(--border); white-space: nowrap; position: sticky; top: 0; z-index: 1; }
+  tbody tr { border-bottom: 1px solid var(--border); transition: background .1s; }
+  tbody tr:last-child { border-bottom: none; }
+  tbody tr:hover { background: var(--card); }
+  tbody td { padding: 9px 12px; vertical-align: top; max-width: 220px; word-break: break-word; }
+  td.inv { font-family: monospace; font-size: 13px; color: var(--accent); white-space: nowrap; }
+  td.photos a { color: var(--accent); text-decoration: none; font-size: 12px; display: inline-block; margin-right: 6px; }
+  td.photos a:hover { text-decoration: underline; }
+
+  /* ── Статус-бейдж ── */
+  .badge { display: inline-block; padding: 2px 8px; border-radius: 4px; font-size: 11px; font-weight: 500; }
+  .badge-ok      { background: rgba(46,204,113,.2); color: var(--accent2); }
+  .badge-warn    { background: rgba(230,126,34,.2); color: var(--warn); }
+  .badge-danger  { background: rgba(231,76,60,.2); color: var(--danger); }
+  .badge-neutral { background: var(--border); color: var(--muted); }
+
+  /* ── Пагинация ── */
+  .pagination { display: flex; align-items: center; gap: 8px; margin-top: 14px; justify-content: flex-end; flex-wrap: wrap; }
+  .pagination span { color: var(--muted); font-size: 12px; }
+
+  /* ── Формы ── */
+  .form-card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 24px; max-width: 560px; }
+  .form-card h2 { font-size: 15px; margin-bottom: 18px; }
+  .form-row { display: flex; flex-direction: column; gap: 4px; margin-bottom: 14px; }
+  .form-row label { font-size: 12px; color: var(--muted); }
+  .form-row input, .form-row select, .form-row textarea {
+    background: var(--card); border: 1px solid var(--border); color: var(--text);
+    padding: 9px 12px; border-radius: var(--radius); font-size: 13px; width: 100%;
+    outline: none; transition: border-color .15s;
+  }
+  .form-row textarea { resize: vertical; min-height: 80px; font-family: inherit; }
+  .form-row input:focus, .form-row select:focus, .form-row textarea:focus { border-color: var(--accent); }
+  .form-actions { display: flex; gap: 10px; margin-top: 18px; }
+
+  /* ── Toast ── */
+  #toast { position: fixed; bottom: 20px; right: 20px; background: var(--card); color: var(--text); border: 1px solid var(--border); border-radius: var(--radius); padding: 12px 18px; font-size: 13px; opacity: 0; transition: opacity .25s; pointer-events: none; z-index: 999; max-width: 320px; }
+  #toast.show { opacity: 1; }
+  #toast.toast-ok   { border-left: 3px solid var(--accent2); }
+  #toast.toast-err  { border-left: 3px solid var(--danger); }
+  #toast.toast-info { border-left: 3px solid var(--accent); }
+
+  /* ── Прочее ── */
+  .empty { text-align: center; padding: 40px; color: var(--muted); }
+  .loading { text-align: center; padding: 30px; color: var(--muted); }
+  .info-box { background: var(--card); border: 1px solid var(--border); border-radius: var(--radius); padding: 14px 18px; font-size: 13px; color: var(--muted); margin-bottom: 16px; }
+  .info-box strong { color: var(--text); }
+  .section-title { font-size: 12px; color: var(--muted); text-transform: uppercase; letter-spacing: .5px; margin-bottom: 10px; }
+</style>
+</head>
+<body>
+
+<!-- ═══════════════════════════════════════════════════════════════════════════
+  КОНФИГУРАЦИЯ — заполните перед использованием
+
+  1. spreadsheetId  — ID вашей Google Таблицы
+     Из URL: https://docs.google.com/spreadsheets/d/{ВОТ_ЭТО}/edit
+
+  2. apiKey  — API-ключ Google Cloud (Sheets API v4 должен быть включён)
+     Таблица должна быть «Всем, у кого есть ссылка» → Просмотр
+
+  3. appsScriptUrl  — URL задеплоенного Apps Script (см. apps_script.gs)
+     Деплой → Управление публикациями → Веб-приложение
+     Доступ: Все (в т.ч. анонимные)
+═══════════════════════════════════════════════════════════════════════════ -->
+<script>
+const CFG = {
+  spreadsheetId: '1FC8W38KwJ-zo9RbKDyZBPGfLMjRK6XFdkBVKEk7RPfU',  // ← ID таблицы Google Sheets
+  apiKey:        'AIzaSyBn8y_JopE0ZnFm1Y1oKrUbKkOb0SK0d_I',  // ← API-ключ Google
+  appsScriptUrl: 'https://script.google.com/macros/s/AKfycbwRJXkKZdrkJ2Q9PsRD2_H_L84oTPb_-crPZeMYkhfNTRJvFWCgC04wUdGxQldBRl1z/exec',        // ← URL задеплоенного Apps Script
+
+  sheetEq: 'Оборудование',
+  sheetMv: 'Журнал перемещений',
+
+  // Индексы столбцов листа "Оборудование" (0-based):
+  // A=0 Дата, B=1 Кто вносил, C=2 Комплекс, D=3 Инв.номер,
+  // E=4 Категория, F=5 Состояние, G=6 Описание,
+  // H=7 Расположение (пусто), I=8 Фото наклейки, J=9 Фото шильдика, K=10 Фото общего вида
+  eq: { date:0, user:1, complex:2, inv:3, cat:4, cond:5, desc:6, ph1:8, ph2:9, ph3:10 },
+
+  // Индексы столбцов листа "Журнал перемещений" (0-based):
+  // A=0 Дата, B=1 Кто, C=2 Инв.номер, D=3 Откуда, E=4 Куда, F=5 Причина, G=6 Примечание
+  mv: { date:0, user:1, inv:2, from:3, to:4, reason:5, note:6 },
+};
+
+const COMPLEXES  = ['Остров','Маяк','Юрловский','Косино','Арктика','Янтарь'];
+const CATEGORIES = [
+  'Климатическое (чиллеры, пушки, кондиционеры)',
+  'Строительное (фены, перфораторы, болгарки)',
+  'Уборочное (пылесосы, мойки, поломоечные)',
+  'Электрика (генераторы, удлинители, щитки)',
+  'Спортивное оборудование',
+  'Мебель и инвентарь',
+  'Другое',
+];
+const CONDITIONS = [
+  'Отличное — работает без замечаний',
+  'Рабочее — есть мелкие замечания',
+  'Требует ремонта',
+  'Не работает / списать',
+  'Не проверялось',
+];
+const MOVE_REASONS = [
+  'Перевод на другой объект',
+  'Временная аренда',
+  'На ремонт',
+  'После ремонта',
+  'Другое',
+];
+</script>
+
+<!-- ─── Шапка ─────────────────────────────────────────────────────────────── -->
+<div class="header">
+  <div>
+    <h1>ТМЦ — Учёт оборудования</h1>
+    <div class="subtitle">Спортивные комплексы</div>
+  </div>
+  <div class="header-right">
+    <span class="status-dot" id="statusDot"></span>
+    <span id="statusText">не подключено</span>
+    <button class="btn btn-ghost" onclick="loadEquipment()">↻ Обновить</button>
+  </div>
+</div>
+
+<!-- ─── Вкладки ───────────────────────────────────────────────────────────── -->
+<div class="tabs">
+  <div class="tab active" onclick="switchTab('list')">Перечень</div>
+  <div class="tab" onclick="switchTab('move')">Переместить</div>
+  <div class="tab" onclick="switchTab('writeoff')">Списать</div>
+  <div class="tab" onclick="switchTab('add')">Внести</div>
+</div>
+
+<!-- ─── Вкладка: Перечень ─────────────────────────────────────────────────── -->
+<div class="pane active" id="pane-list">
+  <div class="filters">
+    <div class="filter-group">
+      <label>Поиск</label>
+      <input type="text" id="fSearch" placeholder="Номер, описание..." oninput="debouncedRender()">
+    </div>
+    <div class="filter-group">
+      <label>Комплекс</label>
+      <select id="fComplex" onchange="renderTable()">
+        <option value="">Все</option>
+      </select>
+    </div>
+    <div class="filter-group">
+      <label>Категория</label>
+      <select id="fCategory" onchange="renderTable()">
+        <option value="">Все</option>
+      </select>
+    </div>
+    <div class="filter-group">
+      <label>Состояние</label>
+      <select id="fCondition" onchange="renderTable()">
+        <option value="">Все</option>
+      </select>
+    </div>
+    <div class="filter-group">
+      <label>Ответственный</label>
+      <input type="text" id="fUser" placeholder="Имя..." oninput="debouncedRender()">
+    </div>
+    <button class="btn btn-ghost btn-reset" onclick="resetFilters()">Сбросить</button>
+  </div>
+
+  <div id="tableContainer" class="loading">Загрузка...</div>
+  <div class="pagination" id="pagination"></div>
+</div>
+
+<!-- ─── Вкладка: Переместить ─────────────────────────────────────────────── -->
+<div class="pane" id="pane-move">
+  <div class="form-card">
+    <h2>Оформить перемещение</h2>
+    <div class="info-box">Запись будет добавлена в лист <strong>Перемещения</strong>.</div>
+    <div class="form-row">
+      <label>Инвентарный номер *</label>
+      <input type="text" id="mInv" placeholder="INV-001">
+    </div>
+    <div class="form-row">
+      <label>Откуда *</label>
+      <select id="mFrom"><option value="">— выберите —</option></select>
+    </div>
+    <div class="form-row">
+      <label>Куда *</label>
+      <select id="mTo"><option value="">— выберите —</option></select>
+    </div>
+    <div class="form-row">
+      <label>Причина *</label>
+      <select id="mReason"><option value="">— выберите —</option></select>
+    </div>
+    <div class="form-row">
+      <label>Примечание</label>
+      <textarea id="mNote" placeholder="Необязательно"></textarea>
+    </div>
+    <div class="form-actions">
+      <button class="btn btn-primary" onclick="submitMove()">Сохранить</button>
+      <button class="btn btn-ghost" onclick="resetMove()">Очистить</button>
+    </div>
+  </div>
+</div>
+
+<!-- ─── Вкладка: Списать ──────────────────────────────────────────────────── -->
+<div class="pane" id="pane-writeoff">
+  <div class="form-card">
+    <h2>Списать оборудование</h2>
+    <div class="info-box">
+      В строке оборудования будет обновлено поле
+      <strong>Состояние</strong> на «Не работает / списать».
+    </div>
+    <div class="form-row">
+      <label>Инвентарный номер *</label>
+      <input type="text" id="wInv" placeholder="INV-001">
+    </div>
+    <div class="form-row">
+      <label>Причина / примечание</label>
+      <textarea id="wNote" placeholder="Необязательно"></textarea>
+    </div>
+    <div class="form-actions">
+      <button class="btn btn-danger" onclick="submitWriteoff()">Списать</button>
+      <button class="btn btn-ghost" onclick="resetWriteoff()">Очистить</button>
+    </div>
+  </div>
+</div>
+
+<!-- ─── Вкладка: Внести ───────────────────────────────────────────────────── -->
+<div class="pane" id="pane-add">
+  <div class="form-card">
+    <h2>Добавить оборудование</h2>
+    <div class="info-box">Строка будет добавлена в лист <strong>Оборудование</strong>.</div>
+    <div class="form-row">
+      <label>Комплекс *</label>
+      <select id="aComplex"><option value="">— выберите —</option></select>
+    </div>
+    <div class="form-row">
+      <label>Инвентарный номер *</label>
+      <input type="text" id="aInv" placeholder="INV-001">
+    </div>
+    <div class="form-row">
+      <label>Категория *</label>
+      <select id="aCategory"><option value="">— выберите —</option></select>
+    </div>
+    <div class="form-row">
+      <label>Состояние *</label>
+      <select id="aCondition"><option value="">— выберите —</option></select>
+    </div>
+    <div class="form-row">
+      <label>Описание</label>
+      <textarea id="aDesc" placeholder="Назначение, замечания, расположение..."></textarea>
+    </div>
+    <div class="section-title" style="margin-top:4px">Ссылки на фото (из Битрикс24 Диска)</div>
+    <div class="form-row">
+      <label>Фото наклейки</label>
+      <input type="url" id="aPh1" placeholder="https://...">
+    </div>
+    <div class="form-row">
+      <label>Фото шильдика</label>
+      <input type="url" id="aPh2" placeholder="https://...">
+    </div>
+    <div class="form-row">
+      <label>Фото общего вида</label>
+      <input type="url" id="aPh3" placeholder="https://...">
+    </div>
+    <div class="form-actions">
+      <button class="btn btn-success" onclick="submitAdd()">Добавить</button>
+      <button class="btn btn-ghost" onclick="resetAdd()">Очистить</button>
+    </div>
+  </div>
+</div>
+
+<!-- ─── Toast ─────────────────────────────────────────────────────────────── -->
+<div id="toast"></div>
+
+<script>
+// ─── Состояние ────────────────────────────────────────────────────────────────
+
+let allRows     = [];   // все строки листа "Оборудование" без заголовка
+let pageSize    = 50;
+let currentPage = 1;
+let debounceTimer = null;
+
+// ─── Инициализация ────────────────────────────────────────────────────────────
+
+document.addEventListener('DOMContentLoaded', () => {
+  populateSelects();
+  if (CFG.spreadsheetId && CFG.apiKey) {
+    loadEquipment();
+  } else {
+    document.getElementById('tableContainer').innerHTML =
+      '<div class="empty">⚙ Заполните CFG.spreadsheetId и CFG.apiKey в начале файла</div>';
+    setStatus(false, 'не настроено');
+  }
+});
+
+function populateSelects() {
+  fillSelectOpts('fComplex',   COMPLEXES,    true);
+  fillSelectOpts('fCategory',  CATEGORIES,   true);
+  fillSelectOpts('fCondition', CONDITIONS,   true);
+  fillSelectOpts('mFrom',      COMPLEXES,    false);
+  fillSelectOpts('mTo',        COMPLEXES,    false);
+  fillSelectOpts('mReason',    MOVE_REASONS, false);
+  fillSelectOpts('aComplex',   COMPLEXES,    false);
+  fillSelectOpts('aCategory',  CATEGORIES,   false);
+  fillSelectOpts('aCondition', CONDITIONS,   false);
+}
+
+function fillSelectOpts(id, items, addAll) {
+  const sel = document.getElementById(id);
+  if (!sel) return;
+  sel.innerHTML = addAll ? '<option value="">Все</option>' : '<option value="">— выберите —</option>';
+  items.forEach(v => {
+    const o = document.createElement('option');
+    o.value = v; o.textContent = v; sel.appendChild(o);
+  });
+}
+
+// ─── Переключение вкладок ─────────────────────────────────────────────────────
+
+function switchTab(name) {
+  const names = ['list','move','writeoff','add'];
+  document.querySelectorAll('.tab').forEach((t, i) => t.classList.toggle('active', names[i] === name));
+  document.querySelectorAll('.pane').forEach(p => p.classList.remove('active'));
+  document.getElementById('pane-' + name).classList.add('active');
+}
+
+// ─── Загрузка из Google Sheets API v4 ────────────────────────────────────────
+
+async function loadEquipment() {
+  if (!CFG.spreadsheetId || !CFG.apiKey) return;
+
+  const range = encodeURIComponent(`${CFG.sheetEq}!A:J`);
+  const url   = `https://sheets.googleapis.com/v4/spreadsheets/${CFG.spreadsheetId}/values/${range}?key=${CFG.apiKey}`;
+
+  document.getElementById('tableContainer').innerHTML = '<div class="loading">Загрузка...</div>';
+
+  try {
+    const resp = await fetch(url);
+    if (!resp.ok) {
+      const err = await resp.json().catch(() => ({}));
+      throw new Error(err.error?.message || `HTTP ${resp.status}`);
+    }
+    const data = await resp.json();
+    const values = data.values || [];
+    // values[0] — заголовки, values[1:] — данные
+    allRows = values.length > 1 ? values.slice(1) : [];
+    currentPage = 1;
+    setStatus(true, `${allRows.length} записей`);
+    renderTable();
+  } catch (e) {
+    setStatus(false, 'ошибка');
+    document.getElementById('tableContainer').innerHTML =
+      `<div class="empty">Ошибка загрузки:<br><code>${escHtml(e.message)}</code></div>`;
+  }
+}
+
+function debouncedRender() {
+  clearTimeout(debounceTimer);
+  debounceTimer = setTimeout(() => { currentPage = 1; renderTable(); }, 250);
+}
+
+// ─── Фильтрация и рендер ──────────────────────────────────────────────────────
+
+function applyFilters(rows) {
+  const fSearch   = (document.getElementById('fSearch')?.value   || '').toLowerCase();
+  const fComplex  = (document.getElementById('fComplex')?.value  || '').toLowerCase();
+  const fCategory = (document.getElementById('fCategory')?.value || '').toLowerCase();
+  const fCond     = (document.getElementById('fCondition')?.value|| '').toLowerCase();
+  const fUser     = (document.getElementById('fUser')?.value     || '').toLowerCase();
+
+  return rows.filter(r => {
+    const g = i => (r[i] || '').toLowerCase();
+    if (fComplex  && g(CFG.eq.complex) !== fComplex)   return false;
+    if (fCategory && g(CFG.eq.cat)     !== fCategory)  return false;
+    if (fCond     && g(CFG.eq.cond)    !== fCond)      return false;
+    if (fUser     && !g(CFG.eq.user).includes(fUser))  return false;
+    if (fSearch) {
+      const hay = [g(CFG.eq.inv), g(CFG.eq.desc), g(CFG.eq.complex)].join(' ');
+      if (!hay.includes(fSearch)) return false;
+    }
+    return true;
+  });
+}
+
+function resetFilters() {
+  ['fSearch','fUser'].forEach(id => { const el = document.getElementById(id); if(el) el.value=''; });
+  ['fComplex','fCategory','fCondition'].forEach(id => { const el = document.getElementById(id); if(el) el.value=''; });
+  currentPage = 1;
+  renderTable();
+}
+
+function renderTable() {
+  const filtered = applyFilters(allRows);
+  const total    = filtered.length;
+  const pages    = Math.max(1, Math.ceil(total / pageSize));
+  const start    = (currentPage - 1) * pageSize;
+  const pageRows = filtered.slice(start, start + pageSize);
+
+  if (!total) {
+    document.getElementById('tableContainer').innerHTML = '<div class="empty">Записей не найдено</div>';
+    document.getElementById('pagination').innerHTML = '';
+    return;
+  }
+
+  const tbody = pageRows.map(r => {
+    const c  = CFG.eq;
+    const get = i => escHtml(r[i] || '');
+    const photos = [r[c.ph1], r[c.ph2], r[c.ph3]].filter(Boolean);
+    const photoHtml = photos.map((u, i) => {
+      const lbl = ['наклейка','шильдик','общий'];
+      return `<a href="${escHtml(u)}" target="_blank">${lbl[i] || 'фото'}</a>`;
+    }).join('');
+
+    return `<tr>
+      <td>${get(c.date)}</td>
+      <td class="inv">${get(c.inv)}</td>
+      <td>${get(c.complex)}</td>
+      <td>${get(c.cat)}</td>
+      <td>${condBadge(r[c.cond] || '')}</td>
+      <td style="max-width:260px">${get(c.desc)}</td>
+      <td class="photos">${photoHtml}</td>
+      <td>${get(c.user)}</td>
+    </tr>`;
+  }).join('');
+
+  document.getElementById('tableContainer').innerHTML = `
+    <div class="table-wrap">
+      <table>
+        <thead><tr>
+          <th>Дата</th><th>Инв.номер</th><th>Комплекс</th>
+          <th>Категория</th><th>Состояние</th><th>Описание</th>
+          <th>Фото</th><th>Кто вносил</th>
+        </tr></thead>
+        <tbody>${tbody}</tbody>
+      </table>
+    </div>`;
+
+  renderPagination(total, pages);
+}
+
+function condBadge(cond) {
+  const map = [
+    ['Отличное',        'badge-ok'],
+    ['Рабочее',         'badge-ok'],
+    ['Требует ремонта', 'badge-warn'],
+    ['Не работает',     'badge-danger'],
+  ];
+  const cls = map.find(([k]) => cond.startsWith(k))?.[1] || 'badge-neutral';
+  return `<span class="badge ${cls}">${escHtml(cond)}</span>`;
+}
+
+function renderPagination(total, pages) {
+  const pg = document.getElementById('pagination');
+  if (pages <= 1) { pg.innerHTML = `<span>${total} записей</span>`; return; }
+  pg.innerHTML = `
+    <span>${total} записей</span>
+    <button class="btn btn-ghost" onclick="goPage(${currentPage-1})" ${currentPage===1?'disabled':''}>‹</button>
+    <span>стр. ${currentPage} / ${pages}</span>
+    <button class="btn btn-ghost" onclick="goPage(${currentPage+1})" ${currentPage===pages?'disabled':''}>›</button>`;
+}
+
+function goPage(p) { currentPage = p; renderTable(); }
+
+// ─── Запись через Apps Script ─────────────────────────────────────────────────
+// Apps Script должен быть задеплоен с доступом "Все (в т.ч. анонимные)"
+// и обрабатывать POST-запросы (см. apps_script.gs)
+
+async function appsScriptPost(payload) {
+  if (!CFG.appsScriptUrl) {
+    toast('CFG.appsScriptUrl не задан — запись недоступна', 'err');
+    return false;
+  }
+  const resp = await fetch(CFG.appsScriptUrl, {
+    method: 'POST',
+    headers: { 'Content-Type': 'text/plain' },  // Apps Script не принимает application/json с preflight
+    body: JSON.stringify(payload),
+  });
+  if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+  const data = await resp.json();
+  if (data.status !== 'ok') throw new Error(data.message || 'Ошибка Apps Script');
+  return true;
+}
+
+// ─── Форма: Переместить ───────────────────────────────────────────────────────
+
+async function submitMove() {
+  const inv    = val('mInv');
+  const from_  = val('mFrom');
+  const to_    = val('mTo');
+  const reason = val('mReason');
+  const note   = val('mNote');
+
+  if (!inv || !from_ || !to_ || !reason) { toast('Заполните обязательные поля', 'err'); return; }
+  if (from_ === to_)                      { toast('«Откуда» и «Куда» совпадают',  'err'); return; }
+
+  try {
+    await appsScriptPost({ action: 'move', inv, from: from_, to: to_, reason, note });
+    toast(`Перемещение ${inv} сохранено`, 'ok');
+    resetMove();
+    loadEquipment();
+  } catch (e) { toast(`Ошибка: ${e.message}`, 'err'); }
+}
+
+function resetMove() {
+  ['mInv','mNote'].forEach(id => setVal(id, ''));
+  ['mFrom','mTo','mReason'].forEach(id => setVal(id, ''));
+}
+
+// ─── Форма: Списать ───────────────────────────────────────────────────────────
+
+async function submitWriteoff() {
+  const inv  = val('wInv');
+  const note = val('wNote');
+  if (!inv) { toast('Введите инвентарный номер', 'err'); return; }
+
+  try {
+    await appsScriptPost({ action: 'writeoff', inv, note });
+    toast(`Оборудование ${inv} списано`, 'ok');
+    resetWriteoff();
+    loadEquipment();
+  } catch (e) { toast(`Ошибка: ${e.message}`, 'err'); }
+}
+
+function resetWriteoff() {
+  ['wInv','wNote'].forEach(id => setVal(id, ''));
+}
+
+// ─── Форма: Внести ────────────────────────────────────────────────────────────
+
+async function submitAdd() {
+  const complex   = val('aComplex');
+  const inv       = val('aInv');
+  const category  = val('aCategory');
+  const condition = val('aCondition');
+  const desc      = val('aDesc');
+  const ph1       = val('aPh1');
+  const ph2       = val('aPh2');
+  const ph3       = val('aPh3');
+
+  if (!complex || !inv || !category || !condition) {
+    toast('Заполните обязательные поля', 'err'); return;
+  }
+
+  try {
+    await appsScriptPost({ action: 'add_equipment', complex, inv, category, condition, desc, ph1, ph2, ph3 });
+    toast(`Оборудование ${inv} добавлено`, 'ok');
+    resetAdd();
+    loadEquipment();
+  } catch (e) { toast(`Ошибка: ${e.message}`, 'err'); }
+}
+
+function resetAdd() {
+  ['aInv','aDesc','aPh1','aPh2','aPh3'].forEach(id => setVal(id, ''));
+  ['aComplex','aCategory','aCondition'].forEach(id => setVal(id, ''));
+}
+
+// ─── Утилиты ──────────────────────────────────────────────────────────────────
+
+function val(id)        { return (document.getElementById(id)?.value || '').trim(); }
+function setVal(id, v)  { const el = document.getElementById(id); if(el) el.value = v; }
+function escHtml(s) {
+  return String(s)
+    .replace(/&/g,'&amp;').replace(/</g,'&lt;')
+    .replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+function setStatus(ok, text) {
+  document.getElementById('statusDot').className   = 'status-dot' + (ok ? ' ok' : '');
+  document.getElementById('statusText').textContent = text;
+}
+
+let toastTimer = null;
+function toast(msg, type = 'info') {
+  const el = document.getElementById('toast');
+  el.textContent = msg;
+  el.className   = `show toast-${type}`;
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => { el.className = ''; }, 3500);
+}
+</script>
+</body>
+</html>

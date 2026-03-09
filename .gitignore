@@ -30,3 +30,6 @@ nul-
 
 # macOS
 .DS_Store
+
+# Yandex Disk sync copies
+*(копия с компьютера*
