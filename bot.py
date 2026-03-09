@@ -54,6 +54,9 @@ SHEET_EQUIPMENT  = "Оборудование"        # A=Дата, B=Кто вн
                                           # K=Фото общего вида, L=Голосовое (пусто)
 SHEET_MOVEMENTS  = "Журнал перемещений"  # A=Дата, B=Кто, C=Инв.номер,
                                           # D=Откуда, E=Куда, F=Причина, G=Примечание
+SHEET_WRITEOFFS  = "Акты списания"      # A=Дата, B=№ акта, C=Инв.номер,
+                                          # D=Комплекс, E=Категория, F=Причина,
+                                          # G=Описание, H=Кто списывает, I=Фото
 
 GOOGLE_SCOPES = [
     "https://www.googleapis.com/auth/spreadsheets",
@@ -88,6 +91,14 @@ MOVE_REASONS = [
     "Временная аренда",
     "На ремонт",
     "После ремонта",
+    "Другое",
+]
+
+WRITEOFF_REASONS = [
+    "Износ",
+    "Поломка",
+    "Утеря",
+    "Моральное устаревание",
     "Другое",
 ]
 
@@ -137,6 +148,22 @@ def _open_eq_sheet() -> gspread.Worksheet:
     return sh.worksheet(SHEET_EQUIPMENT)
 
 
+def _open_writeoff_sheet() -> gspread.Worksheet:
+    """Открывает лист актов списания. Создаёт с заголовками если не существует."""
+    gc = gspread.authorize(_get_google_creds())
+    sh = gc.open_by_key(SPREADSHEET_ID)
+    try:
+        return sh.worksheet(SHEET_WRITEOFFS)
+    except gspread.exceptions.WorksheetNotFound:
+        ws = sh.add_worksheet(title=SHEET_WRITEOFFS, rows=1000, cols=9)
+        ws.append_row([
+            "Дата", "№ Акта", "Инв.номер", "Комплекс",
+            "Категория", "Причина списания", "Описание",
+            "Кто списывает", "Фото оборудования",
+        ])
+        return ws
+
+
 # ─── FSM ──────────────────────────────────────────────────────────────────────
 
 class Form(StatesGroup):
@@ -160,6 +187,15 @@ class MoveForm(StatesGroup):
     reason       = State()
     note         = State()
     confirm      = State()
+
+
+class WriteoffForm(StatesGroup):
+    inv_number  = State()
+    reason      = State()
+    description = State()
+    photo       = State()
+    who         = State()
+    confirm     = State()
 
 
 # ─── Вспомогательные функции ──────────────────────────────────────────────────
@@ -266,8 +302,10 @@ async def cmd_start(message: Message, state: FSMContext):
         "Команды:\n"
         "  /start      — добавить оборудование\n"
         "  /move       — оформить перемещение\n"
+        "  /writeoff   — списать оборудование\n"
         "  /find       — найти по номеру\n"
         "  /dashboard  — открыть дашборд\n"
+        "  /guide      — инструкция\n"
         "  /cancel     — отменить текущее действие\n\n"
         "Выберите спортивный комплекс:",
         reply_markup=InlineKeyboardMarkup(inline_keyboard=kb_rows),
@@ -293,6 +331,18 @@ async def cmd_dashboard(message: Message):
         InlineKeyboardButton(text="📊 Открыть дашборд", url=DASHBOARD_URL),
     ]])
     await message.answer("Панель управления ТМЦ:", reply_markup=kb)
+
+
+@router.message(Command("guide"))
+async def cmd_guide(message: Message):
+    guide_url = DASHBOARD_URL.rstrip("/") + "#help" if DASHBOARD_URL else ""
+    if not guide_url:
+        await message.answer("Дашборд пока не настроен (DASHBOARD_URL не задан).")
+        return
+    kb = InlineKeyboardMarkup(inline_keyboard=[[
+        InlineKeyboardButton(text="📖 Инструкция", url=guide_url),
+    ]])
+    await message.answer("Инструкция по работе с системой учёта ТМЦ:", reply_markup=kb)
 
 
 # ── Шаг 1: Комплекс ───────────────────────────────────────────────────────────
@@ -832,6 +882,234 @@ async def move_confirm_no(cb: CallbackQuery, state: FSMContext):
     await cb.answer()
 
 
+# ── /writeoff: Списание оборудования ─────────────────────────────────────────
+
+@router.message(Command("writeoff"))
+async def cmd_writeoff(message: Message, state: FSMContext):
+    await state.clear()
+    await message.answer(
+        "Оформление списания оборудования.\n\n"
+        "Введите инвентарный номер:"
+    )
+    await state.set_state(WriteoffForm.inv_number)
+
+
+@router.message(WriteoffForm.inv_number)
+async def wo_inv(message: Message, state: FSMContext):
+    inv = message.text.strip()
+
+    # Ищем оборудование в таблице
+    def _lookup():
+        sheet = _open_eq_sheet()
+        all_rows = sheet.get_all_values()
+        for row in all_rows[1:]:
+            if len(row) > 5 and row[3].strip().lower() == inv.lower():
+                return {
+                    "complex": row[2].strip(),
+                    "category": row[4].strip() if len(row) > 4 else "",
+                    "condition": row[5].strip() if len(row) > 5 else "",
+                    "description": row[6].strip() if len(row) > 6 else "",
+                }
+        return None
+
+    info = await asyncio.to_thread(_lookup)
+    if info is None:
+        await message.answer(
+            f"⚠️ Оборудование с номером <b>{inv}</b> не найдено.\n\n"
+            "Введите другой номер или /cancel для отмены.",
+            parse_mode="HTML",
+        )
+        return
+
+    if info["condition"] == "Списано":
+        await message.answer(
+            f"⚠️ Оборудование <b>{inv}</b> уже списано.\n\n"
+            "Введите другой номер или /cancel для отмены.",
+            parse_mode="HTML",
+        )
+        return
+
+    await state.update_data(
+        inv_number=inv,
+        eq_complex=info["complex"],
+        eq_category=info["category"],
+        eq_description=info["description"],
+    )
+    await message.answer(
+        f"Найдено оборудование:\n\n"
+        f"Инв. номер: <b>{inv}</b>\n"
+        f"Комплекс:   {info['complex']}\n"
+        f"Категория:  {info['category']}\n"
+        f"Состояние:  {info['condition']}\n\n"
+        "Укажите причину списания:",
+        parse_mode="HTML",
+        reply_markup=inline_kb(WRITEOFF_REASONS, "woreason"),
+    )
+    await state.set_state(WriteoffForm.reason)
+
+
+@router.callback_query(WriteoffForm.reason, F.data.startswith("woreason:"))
+async def wo_reason(cb: CallbackQuery, state: FSMContext):
+    idx = int(cb.data.split(":")[1])
+    await state.update_data(reason=WRITEOFF_REASONS[idx])
+    await cb.message.answer(
+        "Опишите ситуацию: что произошло, почему списывается.\n\n"
+        "Можно текстом или голосовым сообщением.\n"
+        "/skip — пропустить."
+    )
+    await state.set_state(WriteoffForm.description)
+    await cb.answer()
+
+
+@router.message(WriteoffForm.description, F.voice)
+async def wo_desc_voice(message: Message, state: FSMContext):
+    await message.answer("Распознаю речь...")
+    text = await transcribe_voice(message.bot, message.voice.file_id)
+    if text:
+        await state.update_data(wo_description=f"[голос] {text}")
+        await message.answer(f"Распознано: {text}")
+    else:
+        await state.update_data(wo_description="[голосовое сообщение]")
+        await message.answer("Голосовое сохранено (текст не распознан).")
+    await _ask_wo_photo(message, state)
+
+
+@router.message(WriteoffForm.description, Command("skip"))
+async def wo_desc_skip(message: Message, state: FSMContext):
+    await state.update_data(wo_description="—")
+    await _ask_wo_photo(message, state)
+
+
+@router.message(WriteoffForm.description)
+async def wo_desc_text(message: Message, state: FSMContext):
+    await state.update_data(wo_description=message.text.strip())
+    await _ask_wo_photo(message, state)
+
+
+async def _ask_wo_photo(message: Message, state: FSMContext):
+    await message.answer(
+        "Сфотографируйте оборудование (обязательно).\n"
+        "Отправьте фото."
+    )
+    await state.set_state(WriteoffForm.photo)
+
+
+@router.message(WriteoffForm.photo, F.photo)
+async def wo_photo(message: Message, state: FSMContext):
+    file_id = message.photo[-1].file_id
+    await state.update_data(wo_photo=file_id)
+    await message.answer(
+        "Фото получено.\n\n"
+        "Введите ФИО ответственного (кто списывает):"
+    )
+    await state.set_state(WriteoffForm.who)
+
+
+@router.message(WriteoffForm.photo)
+async def wo_photo_invalid(message: Message, state: FSMContext):
+    await message.answer("Отправьте фото оборудования (обязательно).")
+
+
+@router.message(WriteoffForm.who)
+async def wo_who(message: Message, state: FSMContext):
+    await state.update_data(who=message.text.strip())
+    await _show_wo_summary(message, state)
+
+
+async def _show_wo_summary(message: Message, state: FSMContext):
+    data = await state.get_data()
+    text = (
+        "Проверьте данные акта списания:\n\n"
+        f"Инв. номер: {data.get('inv_number', '—')}\n"
+        f"Комплекс:   {data.get('eq_complex', '—')}\n"
+        f"Категория:  {data.get('eq_category', '—')}\n"
+        f"Причина:    {data.get('reason', '—')}\n"
+        f"Описание:   {data.get('wo_description', '—')}\n"
+        f"Кто спис.:  {data.get('who', '—')}\n"
+        f"Фото:       1 шт.\n"
+    )
+    kb = InlineKeyboardMarkup(inline_keyboard=[[
+        InlineKeyboardButton(text="Списать", callback_data="woconfirm:yes"),
+        InlineKeyboardButton(text="Отменить", callback_data="woconfirm:no"),
+    ]])
+    await message.answer(text, reply_markup=kb)
+    await state.set_state(WriteoffForm.confirm)
+
+
+@router.callback_query(WriteoffForm.confirm, F.data == "woconfirm:yes")
+async def wo_confirm_yes(cb: CallbackQuery, state: FSMContext, bot: Bot):
+    await cb.message.answer("Загружаю фото и сохраняю акт списания...")
+
+    data = await state.get_data()
+    now = datetime.now().strftime("%Y-%m-%d %H:%M")
+    inv = data.get("inv_number", "")
+
+    # Загрузка фото в Битрикс24
+    photo_link = ""
+    photo_fid = data.get("wo_photo")
+    if photo_fid:
+        try:
+            filename = f"writeoff_{inv}_{now.replace(':', '-')}.jpg"
+            photo_link = await upload_to_bitrix(bot, photo_fid, filename)
+        except Exception as e:
+            log.error(f"Загрузка фото списания: {e}")
+
+    # Запись в лист "Акты списания" + обновление статуса в "Оборудование"
+    def _save():
+        wo_sheet = _open_writeoff_sheet()
+        eq_sheet = _open_eq_sheet()
+
+        # Генерируем номер акта
+        all_vals = wo_sheet.get_all_values()
+        next_num = len(all_vals)  # строка 1 = заголовок
+        act_number = f"АКТ-{next_num:03d}"
+
+        # Пишем акт
+        wo_sheet.append_row([
+            now,
+            act_number,
+            inv,
+            data.get("eq_complex", ""),
+            data.get("eq_category", ""),
+            data.get("reason", ""),
+            data.get("wo_description", ""),
+            data.get("who", ""),
+            photo_link,
+        ])
+
+        # Обновляем статус в листе "Оборудование" → "Списано"
+        all_eq = eq_sheet.get_all_values()
+        for i, row in enumerate(all_eq[1:], start=2):
+            if len(row) > 3 and row[3].strip().lower() == inv.strip().lower():
+                eq_sheet.update_cell(i, 6, "Списано")  # столбец F = Состояние
+                break
+
+        return act_number
+
+    try:
+        act_number = await asyncio.to_thread(_save)
+        await cb.message.answer(
+            f"✓ Акт списания <b>{act_number}</b> оформлен.\n"
+            f"Оборудование {inv} — статус «Списано».\n\n"
+            "/start — добавить оборудование\n"
+            "/writeoff — списать ещё",
+            parse_mode="HTML",
+        )
+    except Exception as e:
+        log.error(f"Запись акта списания: {e}")
+        await cb.message.answer(f"Ошибка записи: {e}")
+
+    await state.clear()
+    await cb.answer()
+
+
+@router.callback_query(WriteoffForm.confirm, F.data == "woconfirm:no")
+async def wo_confirm_no(cb: CallbackQuery, state: FSMContext):
+    await state.clear()
+    await cb.message.answer("Списание отменено. /writeoff — начать заново.")
+    await cb.answer()
+
+
 # ── Fallback ──────────────────────────────────────────────────────────────────
 
 @router.message()
@@ -853,8 +1131,10 @@ async def main():
     commands = [
         BotCommand(command="start",     description="Добавить оборудование"),
         BotCommand(command="move",      description="Оформить перемещение"),
+        BotCommand(command="writeoff",  description="Списать оборудование"),
         BotCommand(command="find",      description="Найти по инвентарному номеру"),
         BotCommand(command="dashboard", description="Открыть дашборд"),
+        BotCommand(command="guide",     description="Инструкция по работе"),
         BotCommand(command="cancel",    description="Отменить текущее действие"),
     ]
     await bot.set_my_commands(commands)

@@ -21,6 +21,7 @@
 var SPREADSHEET_ID  = '1FC8W38KwJ-zo9RbKDyZBPGfLMjRK6XFdkBVKEk7RPfU';  // ← ID таблицы
 var SHEET_EQUIPMENT = 'Оборудование';        // лист с оборудованием
 var SHEET_MOVEMENTS = 'Журнал перемещений';  // лист с перемещениями
+var SHEET_WRITEOFFS = 'Акты списания';       // лист с актами списания
 
 // Индексы столбцов листа "Оборудование" (1-based для Sheets API)
 // A=1 Дата, B=2 Кто вносил, C=3 Комплекс, D=4 Инв.номер,
@@ -137,30 +138,71 @@ function addMovement(p) {
 }
 
 // ── Списание оборудования ─────────────────────────────────────────────────────
-// Ищет строку по инв.номеру и обновляет столбец "Состояние"
-// payload: { action, inv, note }
+// Создаёт акт в листе "Акты списания" и обновляет статус в "Оборудование" → "Списано"
+// payload: { action, inv, reason, desc, who, photo }
 
 function writeoff(p) {
-  var ss    = getSpreadsheet();
-  var sheet = ss.getSheetByName(SHEET_EQUIPMENT);
-  if (!sheet) throw new Error('Лист "' + SHEET_EQUIPMENT + '" не найден');
+  var ss      = getSpreadsheet();
+  var eqSheet = ss.getSheetByName(SHEET_EQUIPMENT);
+  if (!eqSheet) throw new Error('Лист "' + SHEET_EQUIPMENT + '" не найден');
 
-  var inv     = (p.inv || '').trim().toLowerCase();
-  var data    = sheet.getDataRange().getValues();
-  var updated = 0;
+  var inv   = (p.inv || '').trim().toLowerCase();
+  var eqData = eqSheet.getDataRange().getValues();
 
-  // data[0] — заголовки, начинаем с data[1]
-  for (var i = 1; i < data.length; i++) {
-    var rowInv = String(data[i][COL_EQ_INV - 1]).trim().toLowerCase();
+  // Ищем оборудование
+  var found    = false;
+  var eqRow    = -1;
+  var complex  = '';
+  var category = '';
+
+  for (var i = 1; i < eqData.length; i++) {
+    var rowInv = String(eqData[i][COL_EQ_INV - 1]).trim().toLowerCase();
     if (rowInv === inv) {
-      sheet.getRange(i + 1, COL_EQ_CONDITION).setValue('Не работает / списать');
-      updated++;
+      found    = true;
+      eqRow    = i + 1;  // 1-based для Sheets
+      complex  = eqData[i][2] || '';  // C = Комплекс
+      category = eqData[i][4] || '';  // E = Категория
+      break;
     }
   }
 
-  if (updated === 0) {
+  if (!found) {
     throw new Error('Оборудование с номером "' + p.inv + '" не найдено');
   }
 
-  return { status: 'ok', message: 'Списано записей: ' + updated + ' (' + p.inv + ')' };
+  // Лист "Акты списания" — создаём если не существует
+  var woSheet = ss.getSheetByName(SHEET_WRITEOFFS);
+  if (!woSheet) {
+    woSheet = ss.insertSheet(SHEET_WRITEOFFS);
+    woSheet.appendRow([
+      'Дата', '№ Акта', 'Инв.номер', 'Комплекс',
+      'Категория', 'Причина списания', 'Описание',
+      'Кто списывает', 'Фото оборудования'
+    ]);
+  }
+
+  // Генерируем номер акта
+  var woData   = woSheet.getDataRange().getValues();
+  var nextNum  = woData.length;  // строка 1 = заголовок
+  var actNum   = 'АКТ-' + ('000' + nextNum).slice(-3);
+
+  var now  = Utilities.formatDate(new Date(), 'Europe/Moscow', 'yyyy-MM-dd HH:mm');
+
+  // Пишем акт списания
+  woSheet.appendRow([
+    now,
+    actNum,
+    p.inv      || '',
+    complex,
+    category,
+    p.reason   || '',
+    p.desc     || '',
+    p.who      || '',
+    p.photo    || '',
+  ]);
+
+  // Обновляем статус в "Оборудование" → "Списано"
+  eqSheet.getRange(eqRow, COL_EQ_CONDITION).setValue('Списано');
+
+  return { status: 'ok', message: 'Акт ' + actNum + ' оформлен. Оборудование ' + p.inv + ' списано.' };
 }
