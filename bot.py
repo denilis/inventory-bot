@@ -653,6 +653,35 @@ async def find_by_number(message: Message, state: FSMContext):
 
 # ── /move: Перемещение оборудования ──────────────────────────────────────────
 
+async def _get_current_location(inv: str) -> str | None:
+    """Определяет текущий комплекс оборудования по инв. номеру.
+    Учитывает журнал перемещений. Возвращает None если не найдено."""
+    if not inv or inv == "—":
+        return None
+
+    def _check():
+        eq_sheet, mv_sheet = _open_sheets()
+        # Ищем в таблице оборудования (столбец D=инв.номер, C=комплекс)
+        all_eq = eq_sheet.get_all_values()
+        original_complex = None
+        for row in all_eq[1:]:
+            if len(row) > 3 and row[3].strip().lower() == inv.strip().lower():
+                original_complex = row[2].strip()
+                break
+        if not original_complex:
+            return None  # оборудование не зарегистрировано
+
+        # Проверяем журнал перемещений — последнее перемещение
+        all_mv = mv_sheet.get_all_values()
+        last_to = None
+        for row in all_mv[1:]:
+            if len(row) > 4 and row[2].strip().lower() == inv.strip().lower():
+                last_to = row[4].strip()  # столбец E = «Куда»
+        return last_to or original_complex
+
+    return await asyncio.to_thread(_check)
+
+
 @router.message(Command("move"))
 async def cmd_move(message: Message, state: FSMContext):
     await state.clear()
@@ -662,9 +691,21 @@ async def cmd_move(message: Message, state: FSMContext):
 
 @router.message(MoveForm.inv_number)
 async def move_inv(message: Message, state: FSMContext):
-    await state.update_data(inv_number=message.text.strip())
+    inv = message.text.strip()
+    current = await _get_current_location(inv)
+    if current is None:
+        await message.answer(
+            f"⚠️ Оборудование с номером <b>{inv}</b> не найдено в таблице.\n\n"
+            "Введите другой номер или /cancel для отмены.",
+            parse_mode="HTML",
+        )
+        return  # остаёмся в MoveForm.inv_number
+
+    await state.update_data(inv_number=inv, current_location=current)
     await message.answer(
+        f"Оборудование найдено. Текущий комплекс: <b>{current}</b>\n\n"
         "Выберите, откуда перемещается:",
+        parse_mode="HTML",
         reply_markup=inline_kb(SPORT_COMPLEXES, "mfrom"),
     )
     await state.set_state(MoveForm.from_complex)
@@ -673,7 +714,22 @@ async def move_inv(message: Message, state: FSMContext):
 @router.callback_query(MoveForm.from_complex, F.data.startswith("mfrom:"))
 async def move_from(cb: CallbackQuery, state: FSMContext):
     idx = int(cb.data.split(":")[1])
-    await state.update_data(from_complex=SPORT_COMPLEXES[idx])
+    from_complex = SPORT_COMPLEXES[idx]
+    data = await state.get_data()
+    current = data.get("current_location", "")
+
+    if current and current != from_complex:
+        await cb.message.answer(
+            f"⚠️ Оборудование <b>{data.get('inv_number')}</b> числится "
+            f"на комплексе «<b>{current}</b>», а не «{from_complex}».\n\n"
+            "Выберите правильный комплекс:",
+            parse_mode="HTML",
+            reply_markup=inline_kb(SPORT_COMPLEXES, "mfrom"),
+        )
+        await cb.answer()
+        return  # остаёмся в MoveForm.from_complex
+
+    await state.update_data(from_complex=from_complex)
     await cb.message.answer(
         "Выберите, куда перемещается:",
         reply_markup=inline_kb(SPORT_COMPLEXES, "mto"),
