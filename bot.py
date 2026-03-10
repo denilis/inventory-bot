@@ -55,9 +55,23 @@ SHEET_EQUIPMENT  = "Оборудование"        # A=Дата, B=Кто вн
                                           # L=Подкатегория, M=Тип ТМЦ, N=Модель
 SHEET_MOVEMENTS  = "Журнал перемещений"  # A=Дата, B=Кто, C=Инв.номер,
                                           # D=Откуда, E=Куда, F=Причина, G=Примечание
-SHEET_WRITEOFFS  = "Акты списания"      # A=Дата, B=№ акта, C=Инв.номер,
+SHEET_WRITEOFFS  = "Акты списания"       # A=Дата, B=№ акта, C=Инв.номер,
                                           # D=Комплекс, E=Категория, F=Причина,
-                                          # G=Описание, H=Кто списывает, I=Фото
+                                          # G=Описание, H=Кто списывает, I=Фото,
+                                          # J=Статус, K=Дата подтв.1, L=Дата подтв.2,
+                                          # M=Комм.отклонения, N=TG ID инициатора
+SHEET_USERS      = os.getenv("SHEET_USERS", "Пользователи")
+                                          # A=TG ID, B=ФИО, C=B24 ID,
+                                          # D=Комплекс, E=Дата регистрации
+
+# Утверждающие (согласование актов списания)
+APPROVER_1_TG_ID  = int(os.getenv("APPROVER_1_TG_ID",  "0"))
+APPROVER_1_B24_ID = int(os.getenv("APPROVER_1_B24_ID", "0"))
+APPROVER_1_NAME   = os.getenv("APPROVER_1_NAME",  "Утверждающий 1")
+
+APPROVER_2_TG_ID  = int(os.getenv("APPROVER_2_TG_ID",  "0"))
+APPROVER_2_B24_ID = int(os.getenv("APPROVER_2_B24_ID", "0"))
+APPROVER_2_NAME   = os.getenv("APPROVER_2_NAME",  "Утверждающий 2")
 
 GOOGLE_SCOPES = [
     "https://www.googleapis.com/auth/spreadsheets",
@@ -177,13 +191,49 @@ def _open_writeoff_sheet() -> gspread.Worksheet:
     try:
         return sh.worksheet(SHEET_WRITEOFFS)
     except gspread.exceptions.WorksheetNotFound:
-        ws = sh.add_worksheet(title=SHEET_WRITEOFFS, rows=1000, cols=9)
+        ws = sh.add_worksheet(title=SHEET_WRITEOFFS, rows=1000, cols=14)
         ws.append_row([
             "Дата", "№ Акта", "Инв.номер", "Комплекс",
             "Категория", "Причина списания", "Описание",
             "Кто списывает", "Фото оборудования",
+            "Статус", "Дата подтв.1", "Дата подтв.2",
+            "Комм.отклонения", "TG ID инициатора",
         ])
         return ws
+
+
+def _open_users_sheet() -> gspread.Worksheet:
+    """Открывает или создаёт лист «Пользователи»."""
+    gc = gspread.authorize(_get_google_creds())
+    sh = gc.open_by_key(SPREADSHEET_ID)
+    try:
+        return sh.worksheet(SHEET_USERS)
+    except gspread.exceptions.WorksheetNotFound:
+        ws = sh.add_worksheet(title=SHEET_USERS, rows=500, cols=5)
+        ws.append_row(["TG ID", "ФИО", "B24 ID", "Комплекс", "Дата регистрации"])
+        return ws
+
+
+def _get_user_by_tg_id(tg_id: int) -> dict | None:
+    """Ищет пользователя в листе «Пользователи» по TG ID. None если не найден."""
+    ws = _open_users_sheet()
+    all_rows = ws.get_all_values()
+    for row in all_rows[1:]:
+        if row and str(row[0]).strip() == str(tg_id):
+            return {
+                "tg_id": row[0],
+                "name": row[1] if len(row) > 1 else "",
+                "b24_id": row[2] if len(row) > 2 else "",
+                "complex": row[3] if len(row) > 3 else "",
+            }
+    return None
+
+
+def _save_user(tg_id: int, name: str, b24_id: str, complex_name: str = "") -> None:
+    """Сохраняет нового пользователя в лист «Пользователи»."""
+    ws = _open_users_sheet()
+    now = datetime.now().strftime("%Y-%m-%d %H:%M")
+    ws.append_row([str(tg_id), name, b24_id, complex_name, now])
 
 
 # ─── FSM ──────────────────────────────────────────────────────────────────────
@@ -221,6 +271,15 @@ class WriteoffForm(StatesGroup):
     photo       = State()
     who         = State()
     confirm     = State()
+
+
+class RegisterForm(StatesGroup):
+    enter_name = State()   # Пользователь вводит имя/фамилию для поиска в Б24
+    pick_user  = State()   # Выбирает из найденных кандидатов
+
+
+class RejectForm(StatesGroup):
+    comment = State()      # Комментарий при отклонении акта
 
 
 # ─── Вспомогательные функции ──────────────────────────────────────────────────
@@ -366,6 +425,73 @@ async def _suggest_next_inv() -> str:
     return await asyncio.to_thread(_calc)
 
 
+async def _ensure_auth(message: Message, state: FSMContext,
+                       after_action: str = "") -> dict | None:
+    """Проверяет регистрацию пользователя.
+    Если пользователь известен — возвращает его данные.
+    Если нет — запускает RegisterForm и возвращает None."""
+    tg_id = message.from_user.id
+    user_data = await asyncio.to_thread(_get_user_by_tg_id, tg_id)
+    if user_data:
+        return user_data
+    await state.update_data(after_register=after_action)
+    await state.set_state(RegisterForm.enter_name)
+    await message.answer(
+        "Вы не зарегистрированы в системе.\n\n"
+        "Введите своё имя или фамилию для поиска в Битрикс24:"
+    )
+    return None
+
+
+async def _notify_approver(
+    bot: Bot,
+    approver_tg_id: int,
+    approver_b24_id: int,
+    act_number: str,
+    inv: str,
+    data: dict,
+    photo_link: str,
+    now: str,
+) -> None:
+    """Отправляет уведомление утверждающему через Telegram и создаёт задачу в Б24."""
+    text = (
+        f"Запрос на списание оборудования\n\n"
+        f"Акт: {act_number}\n"
+        f"Инв. номер: {inv}\n"
+        f"Комплекс: {data.get('eq_complex', '—')}\n"
+        f"Категория: {data.get('eq_category', '—')}\n"
+        f"Причина: {data.get('reason', '—')}\n"
+        f"Описание: {data.get('wo_description', '—')}\n"
+        f"Кто списывает: {data.get('who', '—')}\n"
+        f"Дата: {now}"
+    )
+    if photo_link:
+        text += f"\nФото: {photo_link}"
+
+    kb = InlineKeyboardMarkup(inline_keyboard=[[
+        InlineKeyboardButton(text="✅ Подтвердить",
+                             callback_data=f"approve:yes:{act_number}"),
+        InlineKeyboardButton(text="❌ Отклонить",
+                             callback_data=f"approve:no:{act_number}"),
+    ]])
+
+    if approver_tg_id:
+        try:
+            await bot.send_message(approver_tg_id, text, reply_markup=kb)
+        except Exception as e:
+            log.error(f"Уведомление утверждающему {approver_tg_id}: {e}")
+
+    if bx and approver_b24_id:
+        try:
+            await bx.create_task(
+                title=f"Подтверждение списания {act_number}",
+                description=text,
+                responsible_id=approver_b24_id,
+            )
+        except Exception as e:
+            log.error(f"Задача Б24 для {approver_b24_id}: {e}")
+
+
 # ─── Роутер ───────────────────────────────────────────────────────────────────
 
 router = Router()
@@ -376,6 +502,9 @@ router = Router()
 @router.message(Command("start"))
 async def cmd_start(message: Message, state: FSMContext):
     await state.clear()
+    user = await _ensure_auth(message, state, after_action="start")
+    if user is None:
+        return
     kb_rows = list(inline_kb(SPORT_COMPLEXES, "complex").inline_keyboard)
     if DASHBOARD_URL:
         kb_rows.append([InlineKeyboardButton(text="📊 Открыть дашборд", url=DASHBOARD_URL)])
@@ -402,6 +531,76 @@ async def cmd_cancel(message: Message, state: FSMContext):
         "Действие отменено.\n/start — начать заново.",
         reply_markup=ReplyKeyboardRemove(),
     )
+
+
+# ── Регистрация пользователя ───────────────────────────────────────────────────
+
+@router.message(RegisterForm.enter_name)
+async def reg_enter_name(message: Message, state: FSMContext):
+    name_query = message.text.strip()
+    if not name_query:
+        await message.answer("Введите имя или фамилию.")
+        return
+
+    if not bx:
+        # Битрикс24 не настроен — регистрируем без B24 ID
+        await asyncio.to_thread(_save_user, message.from_user.id, name_query, "")
+        data = await state.get_data()
+        after_action = data.get("after_register", "")
+        await state.clear()
+        suffix = f"\n\nТеперь используйте /{after_action}" if after_action else ""
+        await message.answer(f"Зарегистрированы как: {name_query}{suffix}")
+        return
+
+    await message.answer("Ищу в Битрикс24...")
+    try:
+        users = await bx.get_users(name_query)
+    except Exception as e:
+        log.error(f"B24 get_users: {e}")
+        users = []
+
+    if not users:
+        await message.answer(
+            f"Пользователь «{name_query}» не найден в Битрикс24.\n\n"
+            "Попробуйте другое имя/фамилию:"
+        )
+        return  # остаёмся в RegisterForm.enter_name
+
+    candidates = [
+        f"{u.get('NAME', '')} {u.get('LAST_NAME', '')}".strip()
+        for u in users[:5]
+    ]
+    await state.update_data(b24_candidates=users[:5])
+    await message.answer(
+        "Найдены пользователи. Выберите себя:",
+        reply_markup=inline_kb(candidates, "regpick"),
+    )
+    await state.set_state(RegisterForm.pick_user)
+
+
+@router.callback_query(RegisterForm.pick_user, F.data.startswith("regpick:"))
+async def reg_pick_user(cb: CallbackQuery, state: FSMContext):
+    idx = int(cb.data.split(":")[1])
+    data = await state.get_data()
+    candidates: list = data.get("b24_candidates", [])
+    if idx >= len(candidates):
+        await cb.answer("Ошибка выбора", show_alert=True)
+        return
+
+    chosen = candidates[idx]
+    b24_id = str(chosen.get("ID", ""))
+    full_name = f"{chosen.get('NAME', '')} {chosen.get('LAST_NAME', '')}".strip()
+
+    await asyncio.to_thread(_save_user, cb.from_user.id, full_name, b24_id)
+
+    after_action = data.get("after_register", "")
+    await state.clear()
+
+    suffix = f"\n\nТеперь используйте /{after_action}" if after_action else ""
+    await cb.message.answer(
+        f"Добро пожаловать, {full_name}! Вы зарегистрированы в системе.{suffix}"
+    )
+    await cb.answer()
 
 
 @router.message(Command("dashboard"))
@@ -1140,6 +1339,16 @@ async def wo_inv(message: Message, state: FSMContext):
                 }
         return None
 
+    def _check_pending():
+        wo_sheet = _open_writeoff_sheet()
+        all_rows = wo_sheet.get_all_values()
+        for row in all_rows[1:]:
+            if len(row) > 2 and row[2].strip().lower() == inv.lower():
+                status = row[9].strip() if len(row) > 9 else ""
+                if status in ("Ожидает_Родимовой", "Ожидает_ГД"):
+                    return True
+        return False
+
     info = await asyncio.to_thread(_lookup)
     if info is None:
         await message.answer(
@@ -1152,6 +1361,15 @@ async def wo_inv(message: Message, state: FSMContext):
     if info["condition"] == "Списано":
         await message.answer(
             f"Оборудование <b>{inv}</b> уже списано.\n\n"
+            "Введите другой номер или /cancel для отмены.",
+            parse_mode="HTML",
+        )
+        return
+
+    has_pending = await asyncio.to_thread(_check_pending)
+    if has_pending:
+        await message.answer(
+            f"Оборудование <b>{inv}</b> уже находится на стадии согласования списания.\n\n"
             "Введите другой номер или /cancel для отмены.",
             parse_mode="HTML",
         )
@@ -1226,11 +1444,19 @@ async def _ask_wo_photo(message: Message, state: FSMContext):
 async def wo_photo(message: Message, state: FSMContext):
     file_id = message.photo[-1].file_id
     await state.update_data(wo_photo=file_id)
-    await message.answer(
-        "Фото получено.\n\n"
-        "Введите ФИО ответственного (кто списывает):"
-    )
-    await state.set_state(WriteoffForm.who)
+
+    # Пробуем автозаполнить "кто списывает" из регистрации
+    user_data = await asyncio.to_thread(_get_user_by_tg_id, message.from_user.id)
+    if user_data and user_data.get("name"):
+        await state.update_data(who=user_data["name"])
+        await message.answer(f"Фото получено. Ответственный: {user_data['name']}")
+        await _show_wo_summary(message, state)
+    else:
+        await message.answer(
+            "Фото получено.\n\n"
+            "Введите ФИО ответственного (кто списывает):"
+        )
+        await state.set_state(WriteoffForm.who)
 
 
 @router.message(WriteoffForm.photo)
@@ -1266,11 +1492,12 @@ async def _show_wo_summary(message: Message, state: FSMContext):
 
 @router.callback_query(WriteoffForm.confirm, F.data == "woconfirm:yes")
 async def wo_confirm_yes(cb: CallbackQuery, state: FSMContext, bot: Bot):
-    await cb.message.answer("Загружаю фото и сохраняю акт списания...")
+    await cb.message.answer("Загружаю фото и создаю акт списания...")
 
     data = await state.get_data()
     now = datetime.now().strftime("%Y-%m-%d %H:%M")
     inv = data.get("inv_number", "")
+    initiator_tg_id = cb.from_user.id
 
     # Загрузка фото в Битрикс24
     photo_link = ""
@@ -1282,17 +1509,12 @@ async def wo_confirm_yes(cb: CallbackQuery, state: FSMContext, bot: Bot):
         except Exception as e:
             log.error(f"Загрузка фото списания: {e}")
 
-    # Запись в лист "Акты списания" + обновление статуса в "Оборудование"
-    def _save():
+    # Запись в лист "Акты списания" со статусом "Ожидает_Родимовой"
+    def _save_pending():
         wo_sheet = _open_writeoff_sheet()
-        eq_sheet = _open_eq_sheet()
-
-        # Генерируем номер акта
         all_vals = wo_sheet.get_all_values()
         next_num = len(all_vals)  # строка 1 = заголовок
         act_number = f"АКТ-{next_num:03d}"
-
-        # Пишем акт
         wo_sheet.append_row([
             now,
             act_number,
@@ -1303,30 +1525,41 @@ async def wo_confirm_yes(cb: CallbackQuery, state: FSMContext, bot: Bot):
             data.get("wo_description", ""),
             data.get("who", ""),
             photo_link,
+            "Ожидает_Родимовой",   # J: Статус
+            "",                     # K: Дата подтв.1
+            "",                     # L: Дата подтв.2
+            "",                     # M: Комм.отклонения
+            str(initiator_tg_id),   # N: TG ID инициатора
         ])
-
-        # Обновляем статус в листе "Оборудование" → "Списано"
-        all_eq = eq_sheet.get_all_values()
-        for i, row in enumerate(all_eq[1:], start=2):
-            if len(row) > 3 and row[3].strip().lower() == inv.strip().lower():
-                eq_sheet.update_cell(i, 6, "Списано")  # столбец F = Состояние
-                break
-
         return act_number
 
     try:
-        act_number = await asyncio.to_thread(_save)
-        await cb.message.answer(
-            f"✓ Акт списания <b>{act_number}</b> оформлен.\n"
-            f"Оборудование {inv} — статус «Списано».\n\n"
-            "/start — добавить оборудование\n"
-            "/writeoff — списать ещё",
-            parse_mode="HTML",
-        )
+        act_number = await asyncio.to_thread(_save_pending)
     except Exception as e:
         log.error(f"Запись акта списания: {e}")
         await cb.message.answer(f"Ошибка записи: {e}")
+        await state.clear()
+        await cb.answer()
+        return
 
+    # Уведомляем первого утверждающего (Родимова)
+    await _notify_approver(
+        bot=bot,
+        approver_tg_id=APPROVER_1_TG_ID,
+        approver_b24_id=APPROVER_1_B24_ID,
+        act_number=act_number,
+        inv=inv,
+        data=data,
+        photo_link=photo_link,
+        now=now,
+    )
+
+    await cb.message.answer(
+        f"✓ Акт <b>{act_number}</b> создан.\n"
+        f"Ожидает подтверждения: {APPROVER_1_NAME}\n\n"
+        "Вы получите уведомление о решении.",
+        parse_mode="HTML",
+    )
     await state.clear()
     await cb.answer()
 
@@ -1336,6 +1569,192 @@ async def wo_confirm_no(cb: CallbackQuery, state: FSMContext):
     await state.clear()
     await cb.message.answer("Списание отменено. /writeoff — начать заново.")
     await cb.answer()
+
+
+# ── Согласование актов списания ───────────────────────────────────────────────
+
+@router.callback_query(F.data.startswith("approve:"))
+async def approve_callback(cb: CallbackQuery, state: FSMContext, bot: Bot):
+    """Обработка решения утверждающего: подтвердить / отклонить."""
+    parts = cb.data.split(":", 2)
+    if len(parts) < 3:
+        await cb.answer("Неверный формат", show_alert=True)
+        return
+
+    decision = parts[1]   # "yes" / "no"
+    act_number = parts[2]
+    approver_tg_id = cb.from_user.id
+
+    if decision == "no":
+        await state.update_data(
+            reject_act=act_number,
+            reject_approver_tg_id=approver_tg_id,
+        )
+        await state.set_state(RejectForm.comment)
+        await cb.message.answer(
+            f"Отклонение акта {act_number}.\n\nУкажите причину отклонения:"
+        )
+        await cb.answer()
+        return
+
+    # ── Подтверждение ──────────────────────────────────────────────────────
+    now = datetime.now().strftime("%Y-%m-%d %H:%M")
+
+    def _update_approved():
+        wo_sheet = _open_writeoff_sheet()
+        all_vals = wo_sheet.get_all_values()
+        for i, row in enumerate(all_vals[1:], start=2):
+            if len(row) > 1 and row[1].strip() == act_number:
+                inv = row[2].strip() if len(row) > 2 else ""
+                status = row[9].strip() if len(row) > 9 else ""
+                initiator_tg_id = row[13].strip() if len(row) > 13 else ""
+
+                if approver_tg_id == APPROVER_1_TG_ID and status == "Ожидает_Родимовой":
+                    wo_sheet.update_cell(i, 10, "Ожидает_ГД")
+                    wo_sheet.update_cell(i, 11, now)
+                    return "need_approver2", inv, initiator_tg_id, row
+
+                if approver_tg_id == APPROVER_2_TG_ID and status == "Ожидает_ГД":
+                    wo_sheet.update_cell(i, 10, "Утверждён")
+                    wo_sheet.update_cell(i, 12, now)
+                    return "approved", inv, initiator_tg_id, row
+
+                return "wrong_status", inv, initiator_tg_id, row
+
+        return "not_found", "", "", []
+
+    try:
+        result, inv, initiator_tg_id, act_row = await asyncio.to_thread(_update_approved)
+    except Exception as e:
+        log.error(f"Обновление статуса акта {act_number}: {e}")
+        await cb.message.answer(f"Ошибка: {e}")
+        await cb.answer()
+        return
+
+    if result == "not_found":
+        await cb.message.answer(f"Акт {act_number} не найден.")
+        await cb.answer()
+        return
+
+    if result == "wrong_status":
+        await cb.message.answer(
+            f"Акт {act_number} уже обработан или не в вашей очереди согласования."
+        )
+        await cb.answer()
+        return
+
+    if result == "need_approver2":
+        # Передаём на второго утверждающего (ГД Пруцков)
+        act_data = {
+            "eq_complex":    act_row[3] if len(act_row) > 3 else "",
+            "eq_category":   act_row[4] if len(act_row) > 4 else "",
+            "reason":        act_row[5] if len(act_row) > 5 else "",
+            "wo_description": act_row[6] if len(act_row) > 6 else "",
+            "who":           act_row[7] if len(act_row) > 7 else "",
+        }
+        photo_link = act_row[8] if len(act_row) > 8 else ""
+        await _notify_approver(
+            bot=bot,
+            approver_tg_id=APPROVER_2_TG_ID,
+            approver_b24_id=APPROVER_2_B24_ID,
+            act_number=act_number,
+            inv=inv,
+            data=act_data,
+            photo_link=photo_link,
+            now=now,
+        )
+        await cb.message.answer(
+            f"✅ Акт {act_number} подтверждён. Направлен на согласование {APPROVER_2_NAME}."
+        )
+        if initiator_tg_id:
+            try:
+                await bot.send_message(
+                    int(initiator_tg_id),
+                    f"Акт {act_number} подтверждён {APPROVER_1_NAME}.\n"
+                    f"Передан на согласование {APPROVER_2_NAME}.",
+                )
+            except Exception as e:
+                log.warning(f"Уведомление инициатору: {e}")
+
+    elif result == "approved":
+        # Финальное подтверждение — ставим "Списано" в листе "Оборудование"
+        def _finalize():
+            eq_sheet = _open_eq_sheet()
+            all_eq = eq_sheet.get_all_values()
+            for i, row in enumerate(all_eq[1:], start=2):
+                if len(row) > 3 and row[3].strip().lower() == inv.strip().lower():
+                    eq_sheet.update_cell(i, 6, "Списано")
+                    break
+
+        try:
+            await asyncio.to_thread(_finalize)
+        except Exception as e:
+            log.error(f"Финальное списание {inv}: {e}")
+
+        await cb.message.answer(
+            f"✅ Акт {act_number} окончательно утверждён.\n"
+            f"Оборудование {inv} — статус «Списано»."
+        )
+        if initiator_tg_id:
+            try:
+                await bot.send_message(
+                    int(initiator_tg_id),
+                    f"✅ Акт {act_number} утверждён {APPROVER_2_NAME}.\n"
+                    f"Оборудование {inv} — статус «Списано».",
+                )
+            except Exception as e:
+                log.warning(f"Уведомление инициатору: {e}")
+
+    await cb.answer()
+
+
+@router.message(RejectForm.comment)
+async def reject_comment(message: Message, state: FSMContext, bot: Bot):
+    """Сохраняет комментарий отклонения и уведомляет инициатора."""
+    comment = message.text.strip()
+    data = await state.get_data()
+    act_number = data.get("reject_act", "")
+    approver_tg_id = data.get("reject_approver_tg_id", 0)
+    now = datetime.now().strftime("%Y-%m-%d %H:%M")
+
+    def _update_rejected():
+        wo_sheet = _open_writeoff_sheet()
+        all_vals = wo_sheet.get_all_values()
+        for i, row in enumerate(all_vals[1:], start=2):
+            if len(row) > 1 and row[1].strip() == act_number:
+                inv = row[2].strip() if len(row) > 2 else ""
+                initiator_tg_id = row[13].strip() if len(row) > 13 else ""
+                wo_sheet.update_cell(i, 10, "Отклонён")
+                wo_sheet.update_cell(i, 13, comment)
+                wo_sheet.update_cell(i, 11, now)  # дата отклонения в K
+                return inv, initiator_tg_id
+        return "", ""
+
+    try:
+        inv, initiator_tg_id = await asyncio.to_thread(_update_rejected)
+    except Exception as e:
+        log.error(f"Отклонение акта {act_number}: {e}")
+        await message.answer(f"Ошибка: {e}")
+        await state.clear()
+        return
+
+    await message.answer(f"❌ Акт {act_number} отклонён.")
+
+    if initiator_tg_id:
+        approver_name = (
+            APPROVER_1_NAME if approver_tg_id == APPROVER_1_TG_ID else APPROVER_2_NAME
+        )
+        try:
+            await bot.send_message(
+                int(initiator_tg_id),
+                f"❌ Акт {act_number} ({inv}) отклонён.\n"
+                f"Кем: {approver_name}\n"
+                f"Причина: {comment}",
+            )
+        except Exception as e:
+            log.warning(f"Уведомление инициатору об отклонении: {e}")
+
+    await state.clear()
 
 
 # ── Fallback ──────────────────────────────────────────────────────────────────

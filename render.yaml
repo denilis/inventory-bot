@@ -6,11 +6,29 @@ services:
     envVars:
       - key: BOT_TOKEN
         sync: false
-      - key: SPREADSHEET_ID
-        sync: false
-      - key: DRIVE_FOLDER_ID
-        sync: false
       - key: OPENAI_API_KEY
         sync: false
+      - key: BITRIX_WEBHOOK_URL
+        sync: false
+      - key: BITRIX_FOLDER_ID
+        sync: false
       - key: GOOGLE_CREDENTIALS_JSON
+        sync: false
+      - key: SPREADSHEET_ID
+        sync: false
+      - key: DASHBOARD_URL
+        sync: false
+      - key: SHEET_USERS
+        sync: false
+      - key: APPROVER_1_TG_ID
+        sync: false
+      - key: APPROVER_1_B24_ID
+        sync: false
+      - key: APPROVER_1_NAME
+        sync: false
+      - key: APPROVER_2_TG_ID
+        sync: false
+      - key: APPROVER_2_B24_ID
+        sync: false
+      - key: APPROVER_2_NAME
         sync: false

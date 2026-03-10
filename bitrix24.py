@@ -185,3 +185,41 @@ class Bitrix24Client:
             params["ELEMENT_ORDER"] = order
         result = await self.call("lists.element.get", params)
         return result or []
+
+    # ── Задачи ────────────────────────────────────────────────────────────────
+
+    async def create_task(self, title: str, description: str,
+                          responsible_id: int,
+                          observer_ids: list[int] | None = None) -> dict:
+        """
+        Создаёт задачу в Битрикс24.
+        responsible_id — ID ответственного (USER_ID в Б24).
+        observer_ids  — список ID наблюдателей (необязательно).
+        Возвращает словарь с данными задачи (содержит ключ 'id').
+        """
+        fields: dict = {
+            "TITLE": title,
+            "DESCRIPTION": description,
+            "RESPONSIBLE_ID": responsible_id,
+        }
+        if observer_ids:
+            fields["AUDITORS"] = observer_ids
+        result = await self.call("tasks.task.add", {"fields": fields})
+        # REST возвращает {"task": {...}} или просто dict
+        if isinstance(result, dict) and "task" in result:
+            return result["task"]
+        return result or {}
+
+    # ── Пользователи ─────────────────────────────────────────────────────────
+
+    async def get_users(self, name: str = "") -> list:
+        """
+        Возвращает список пользователей портала Битрикс24.
+        name — необязательная подстрока для фильтрации по имени/фамилии.
+        Каждый элемент содержит: ID, NAME, LAST_NAME, EMAIL.
+        """
+        params: dict = {"SELECT": ["ID", "NAME", "LAST_NAME", "EMAIL"]}
+        if name:
+            params["FILTER"] = {"%NAME": name}
+        result = await self.call("user.get", params)
+        return result if isinstance(result, list) else []
