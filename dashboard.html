@@ -89,7 +89,7 @@
   .pagination span { color: var(--muted); font-size: 12px; }
 
   /* ── Формы ── */
-  .form-card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 24px; max-width: 560px; }
+  .form-card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 24px; max-width: 600px; }
   .form-card h2 { font-size: 15px; margin-bottom: 18px; }
   .form-row { display: flex; flex-direction: column; gap: 4px; margin-bottom: 14px; }
   .form-row label { font-size: 12px; color: var(--muted); }
@@ -100,7 +100,11 @@
   }
   .form-row textarea { resize: vertical; min-height: 80px; font-family: inherit; }
   .form-row input:focus, .form-row select:focus, .form-row textarea:focus { border-color: var(--accent); }
+  .form-row .hint { font-size: 11px; color: var(--muted); margin-top: 2px; }
+  .form-row .hint.warn { color: var(--warn); }
   .form-actions { display: flex; gap: 10px; margin-top: 18px; }
+  .form-row-inline { display: flex; gap: 10px; }
+  .form-row-inline .form-row { flex: 1; }
 
   /* ── Toast ── */
   #toast { position: fixed; bottom: 20px; right: 20px; background: var(--card); color: var(--text); border: 1px solid var(--border); border-radius: var(--radius); padding: 12px 18px; font-size: 13px; opacity: 0; transition: opacity .25s; pointer-events: none; z-index: 999; max-width: 320px; }
@@ -116,6 +120,7 @@
   .help-section ul, .help-section ol { padding-left: 20px; margin-top: 6px; }
   .help-section li { margin-bottom: 4px; }
   .help-section code { background: var(--card); padding: 1px 5px; border-radius: 3px; font-size: 12px; }
+  .help-section .note { background: var(--card); border-left: 3px solid var(--warn); padding: 10px 14px; border-radius: 0 var(--radius) var(--radius) 0; margin: 8px 0; font-size: 12px; }
 
   /* ── Прочее ── */
   .empty { text-align: center; padding: 40px; color: var(--muted); }
@@ -128,23 +133,13 @@
 <body>
 
 <!-- ═══════════════════════════════════════════════════════════════════════════
-  КОНФИГУРАЦИЯ — заполните перед использованием
-
-  1. spreadsheetId  — ID вашей Google Таблицы
-     Из URL: https://docs.google.com/spreadsheets/d/{ВОТ_ЭТО}/edit
-
-  2. apiKey  — API-ключ Google Cloud (Sheets API v4 должен быть включён)
-     Таблица должна быть «Всем, у кого есть ссылка» → Просмотр
-
-  3. appsScriptUrl  — URL задеплоенного Apps Script (см. apps_script.gs)
-     Деплой → Управление публикациями → Веб-приложение
-     Доступ: Все (в т.ч. анонимные)
+  КОНФИГУРАЦИЯ
 ═══════════════════════════════════════════════════════════════════════════ -->
 <script>
 const CFG = {
-  spreadsheetId: '1FC8W38KwJ-zo9RbKDyZBPGfLMjRK6XFdkBVKEk7RPfU',  // ← ID таблицы Google Sheets
-  apiKey:        'AIzaSyBn8y_JopE0ZnFm1Y1oKrUbKkOb0SK0d_I',  // ← API-ключ Google
-  appsScriptUrl: 'https://script.google.com/macros/s/AKfycbwRJXkKZdrkJ2Q9PsRD2_H_L84oTPb_-crPZeMYkhfNTRJvFWCgC04wUdGxQldBRl1z/exec',        // ← URL задеплоенного Apps Script
+  spreadsheetId: '1FC8W38KwJ-zo9RbKDyZBPGfLMjRK6XFdkBVKEk7RPfU',
+  apiKey:        'AIzaSyBn8y_JopE0ZnFm1Y1oKrUbKkOb0SK0d_I',
+  appsScriptUrl: 'https://script.google.com/macros/s/AKfycbwRJXkKZdrkJ2Q9PsRD2_H_L84oTPb_-crPZeMYkhfNTRJvFWCgC04wUdGxQldBRl1z/exec',
 
   sheetEq: 'Оборудование',
   sheetMv: 'Журнал перемещений',
@@ -152,24 +147,28 @@ const CFG = {
   // Индексы столбцов листа "Оборудование" (0-based):
   // A=0 Дата, B=1 Кто вносил, C=2 Комплекс, D=3 Инв.номер,
   // E=4 Категория, F=5 Состояние, G=6 Описание,
-  // H=7 Расположение (пусто), I=8 Фото наклейки, J=9 Фото шильдика, K=10 Фото общего вида
-  eq: { date:0, user:1, complex:2, inv:3, cat:4, cond:5, desc:6, ph1:8, ph2:9, ph3:10 },
+  // H=7 Расположение (пусто), I=8 Фото наклейки, J=9 Фото шильдика, K=10 Фото общего вида,
+  // L=11 Подкатегория, M=12 Тип ТМЦ, N=13 Модель
+  eq: { date:0, user:1, complex:2, inv:3, cat:4, cond:5, desc:6, ph1:8, ph2:9, ph3:10, subcat:11, typeTmc:12, model:13 },
 
-  // Индексы столбцов листа "Журнал перемещений" (0-based):
-  // A=0 Дата, B=1 Кто, C=2 Инв.номер, D=3 Откуда, E=4 Куда, F=5 Причина, G=6 Примечание
   mv: { date:0, user:1, inv:2, from:3, to:4, reason:5, note:6 },
 };
 
-const COMPLEXES  = ['Остров','Маяк','Юрловский','Косино','Арктика','Янтарь'];
-const CATEGORIES = [
-  'Климатическое (чиллеры, пушки, кондиционеры)',
-  'Строительное (фены, перфораторы, болгарки)',
-  'Уборочное (пылесосы, мойки, поломоечные)',
-  'Электрика (генераторы, удлинители, щитки)',
-  'Спортивное оборудование',
-  'Мебель и инвентарь',
-  'Другое',
-];
+const COMPLEXES = ['Остров','Маяк','Юрловский','Косино','Арктика','Янтарь'];
+
+// Иерархические категории: Категория → Подкатегории
+const CATEGORIES_TREE = {
+  'Климатическое':           ['Чиллер','Тепловая пушка','Кондиционер','Обогреватель','Вентилятор','Другое'],
+  'Строительное':            ['Перфоратор','Болгарка (УШМ)','Шуруповёрт','Строительный фен','Дрель','Бетономешалка','Другое'],
+  'Уборочное':               ['Пылесос','Мойка высокого давления','Поломоечная машина','Снегоуборщик','Другое'],
+  'Электрика':               ['Генератор','Удлинитель','Электрощиток','Светильник','Другое'],
+  'Спортивное оборудование': ['Тренажёр','Спортивный инвентарь','Другое'],
+  'Мебель':                  ['Шкаф','Стол','Стул','Стеллаж','Тумба','Скамейка','Диван','Другое'],
+  'Инвентарь':               ['Лопата','Метла','Ведро','Тележка','Стремянка','Другое'],
+  'Другое':                  ['Другое'],
+};
+const CATEGORIES = Object.keys(CATEGORIES_TREE);
+
 const CONDITIONS = [
   'Отличное — работает без замечаний',
   'Рабочее — есть мелкие замечания',
@@ -203,16 +202,16 @@ const WRITEOFF_REASONS = [
   <div class="header-right">
     <span class="status-dot" id="statusDot"></span>
     <span id="statusText">не подключено</span>
-    <button class="btn btn-ghost" onclick="loadEquipment()">↻ Обновить</button>
+    <button class="btn btn-ghost" onclick="loadEquipment()">&#8635; Обновить</button>
   </div>
 </div>
 
-<!-- ─── Вкладки ───────────────────────────────────────────────────────────── -->
+<!-- ─── Вкладки (порядок: Перечень, Внести, Переместить, Списать, Инструкция) ── -->
 <div class="tabs">
   <div class="tab active" onclick="switchTab('list')">Перечень</div>
+  <div class="tab" onclick="switchTab('add')">Внести</div>
   <div class="tab" onclick="switchTab('move')">Переместить</div>
   <div class="tab" onclick="switchTab('writeoff')">Списать</div>
-  <div class="tab" onclick="switchTab('add')">Внести</div>
   <div class="tab" onclick="switchTab('help')">Инструкция</div>
 </div>
 
@@ -252,14 +251,90 @@ const WRITEOFF_REASONS = [
   <div class="pagination" id="pagination"></div>
 </div>
 
+<!-- ─── Вкладка: Внести ───────────────────────────────────────────────────── -->
+<div class="pane" id="pane-add">
+  <div class="form-card">
+    <h2>Добавить оборудование</h2>
+    <div class="info-box">Строка будет добавлена в лист <strong>Оборудование</strong>.</div>
+
+    <div class="form-row">
+      <label>Кто вносит (Фамилия Имя) *</label>
+      <input type="text" id="aUser" placeholder="Иванов Иван">
+    </div>
+    <div class="form-row">
+      <label>Комплекс *</label>
+      <select id="aComplex"><option value="">— выберите —</option></select>
+    </div>
+    <div class="form-row">
+      <label>Инвентарный номер *</label>
+      <input type="text" id="aInv" placeholder="001">
+      <div class="hint" id="aInvHint">Номер должен совпадать с кодом на наклейке, которая клеится на оборудование.</div>
+    </div>
+
+    <div class="section-title" style="margin-top:4px">Категория</div>
+    <div class="form-row-inline">
+      <div class="form-row">
+        <label>Категория *</label>
+        <select id="aCategory" onchange="updateSubcats('aCategory','aSubcat')"><option value="">— выберите —</option></select>
+      </div>
+      <div class="form-row">
+        <label>Подкатегория *</label>
+        <select id="aSubcat"><option value="">— сначала категория —</option></select>
+      </div>
+    </div>
+
+    <div class="section-title">Спецификация (с шильдика / заводской таблички)</div>
+    <div class="form-row-inline">
+      <div class="form-row">
+        <label>Тип ТМЦ</label>
+        <input type="text" id="aTypeTmc" placeholder="Кондиционер настенный">
+      </div>
+      <div class="form-row">
+        <label>Модель</label>
+        <input type="text" id="aModel" placeholder="Daikin FTXB35C">
+      </div>
+    </div>
+
+    <div class="form-row">
+      <label>Состояние *</label>
+      <select id="aCondition"><option value="">— выберите —</option></select>
+    </div>
+    <div class="form-row">
+      <label>Описание</label>
+      <textarea id="aDesc" placeholder="Назначение, замечания, расположение..."></textarea>
+    </div>
+    <div class="section-title" style="margin-top:4px">Ссылки на фото (из Битрикс24 Диска)</div>
+    <div class="form-row">
+      <label>Фото наклейки</label>
+      <input type="url" id="aPh1" placeholder="https://...">
+    </div>
+    <div class="form-row">
+      <label>Фото шильдика</label>
+      <input type="url" id="aPh2" placeholder="https://...">
+    </div>
+    <div class="form-row">
+      <label>Фото общего вида</label>
+      <input type="url" id="aPh3" placeholder="https://...">
+    </div>
+    <div class="form-actions">
+      <button class="btn btn-success" onclick="submitAdd()">Добавить</button>
+      <button class="btn btn-ghost" onclick="resetAdd()">Очистить</button>
+    </div>
+  </div>
+</div>
+
 <!-- ─── Вкладка: Переместить ─────────────────────────────────────────────── -->
 <div class="pane" id="pane-move">
   <div class="form-card">
     <h2>Оформить перемещение</h2>
     <div class="info-box">Запись будет добавлена в лист <strong>Перемещения</strong>.</div>
     <div class="form-row">
+      <label>Кто перемещает (Фамилия Имя) *</label>
+      <input type="text" id="mUser" placeholder="Иванов Иван">
+    </div>
+    <div class="form-row">
       <label>Инвентарный номер *</label>
-      <input type="text" id="mInv" placeholder="INV-001">
+      <input type="text" id="mInv" placeholder="001">
     </div>
     <div class="form-row">
       <label>Откуда *</label>
@@ -292,8 +367,12 @@ const WRITEOFF_REASONS = [
       Будет создан <strong>Акт списания</strong> и статус оборудования изменён на «Списано».
     </div>
     <div class="form-row">
+      <label>Кто списывает (Фамилия Имя) *</label>
+      <input type="text" id="wWho" placeholder="Иванов Иван">
+    </div>
+    <div class="form-row">
       <label>Инвентарный номер *</label>
-      <input type="text" id="wInv" placeholder="INV-001">
+      <input type="text" id="wInv" placeholder="001">
     </div>
     <div class="form-row">
       <label>Причина списания *</label>
@@ -302,10 +381,6 @@ const WRITEOFF_REASONS = [
     <div class="form-row">
       <label>Описание (что произошло)</label>
       <textarea id="wDesc" placeholder="Подробности ситуации..."></textarea>
-    </div>
-    <div class="form-row">
-      <label>Кто списывает (ФИО) *</label>
-      <input type="text" id="wWho" placeholder="Иванов Иван Иванович">
     </div>
     <div class="form-row">
       <label>Ссылка на фото оборудования</label>
@@ -322,54 +397,12 @@ const WRITEOFF_REASONS = [
     <div class="form-card" style="max-width:700px">
       <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:16px;">
         <h2>Акт списания</h2>
-        <button class="btn btn-primary" onclick="printAct()">Печать</button>
+        <div style="display:flex; gap:8px;">
+          <button class="btn btn-primary" onclick="printAct()">Печать</button>
+          <button class="btn btn-ghost" onclick="saveActPdf()">Сохранить PDF</button>
+        </div>
       </div>
       <div id="woActContent"></div>
-    </div>
-  </div>
-</div>
-
-<!-- ─── Вкладка: Внести ───────────────────────────────────────────────────── -->
-<div class="pane" id="pane-add">
-  <div class="form-card">
-    <h2>Добавить оборудование</h2>
-    <div class="info-box">Строка будет добавлена в лист <strong>Оборудование</strong>.</div>
-    <div class="form-row">
-      <label>Комплекс *</label>
-      <select id="aComplex"><option value="">— выберите —</option></select>
-    </div>
-    <div class="form-row">
-      <label>Инвентарный номер *</label>
-      <input type="text" id="aInv" placeholder="INV-001">
-    </div>
-    <div class="form-row">
-      <label>Категория *</label>
-      <select id="aCategory"><option value="">— выберите —</option></select>
-    </div>
-    <div class="form-row">
-      <label>Состояние *</label>
-      <select id="aCondition"><option value="">— выберите —</option></select>
-    </div>
-    <div class="form-row">
-      <label>Описание</label>
-      <textarea id="aDesc" placeholder="Назначение, замечания, расположение..."></textarea>
-    </div>
-    <div class="section-title" style="margin-top:4px">Ссылки на фото (из Битрикс24 Диска)</div>
-    <div class="form-row">
-      <label>Фото наклейки</label>
-      <input type="url" id="aPh1" placeholder="https://...">
-    </div>
-    <div class="form-row">
-      <label>Фото шильдика</label>
-      <input type="url" id="aPh2" placeholder="https://...">
-    </div>
-    <div class="form-row">
-      <label>Фото общего вида</label>
-      <input type="url" id="aPh3" placeholder="https://...">
-    </div>
-    <div class="form-actions">
-      <button class="btn btn-success" onclick="submitAdd()">Добавить</button>
-      <button class="btn btn-ghost" onclick="resetAdd()">Очистить</button>
     </div>
   </div>
 </div>
@@ -381,81 +414,130 @@ const WRITEOFF_REASONS = [
 
     <div class="help-section">
       <h3>1. Общие сведения</h3>
-      <p>Система учёта ТМЦ состоит из двух частей:</p>
+      <p>Система учёта ТМЦ (товарно-материальных ценностей) предназначена для инвентаризации оборудования спортивных комплексов компании «Спорт всегда». Состоит из двух частей:</p>
       <ul>
-        <li><strong>Telegram-бот</strong> — для полевой работы: добавление, перемещение, списание и поиск оборудования с возможностью фотографирования и голосового ввода.</li>
+        <li><strong>Telegram-бот</strong> — для полевой работы: добавление, перемещение, списание и поиск оборудования с фотографированием и голосовым вводом.</li>
         <li><strong>Веб-дашборд</strong> (эта страница) — для просмотра, фильтрации и управления данными из браузера.</li>
       </ul>
-      <p>Все данные хранятся в Google Таблице и доступны в режиме реального времени.</p>
+      <p>Все данные хранятся в Google Таблице и доступны в режиме реального времени. Фотографии хранятся на Битрикс24 Диске.</p>
     </div>
 
     <div class="help-section">
-      <h3>2. Telegram-бот — команды</h3>
+      <h3>2. Инвентарный номер</h3>
+      <p>Каждая единица оборудования должна иметь <strong>уникальный инвентарный номер</strong>.</p>
+      <div class="note">Инвентарный номер должен совпадать с кодом на наклейке (стикере), которая физически клеится на оборудование. Перед внесением в систему убедитесь, что наклейка наклеена.</div>
       <ul>
-        <li><strong>/start</strong> — добавить новое оборудование (пошаговый ввод: комплекс, фото, инв. номер, категория, состояние, описание)</li>
-        <li><strong>/move</strong> — оформить перемещение оборудования между комплексами</li>
-        <li><strong>/writeoff</strong> — списать оборудование (с обязательным фото и актом списания)</li>
-        <li><strong>/find</strong> — найти оборудование по инвентарному номеру</li>
-        <li><strong>/dashboard</strong> — открыть этот дашборд</li>
-        <li><strong>/guide</strong> — открыть эту инструкцию</li>
-        <li><strong>/cancel</strong> — отменить текущую операцию</li>
+        <li>Номера назначаются последовательно: 001, 002, 003 и т.д.</li>
+        <li>Система автоматически предлагает следующий свободный номер.</li>
+        <li>Дубликаты запрещены — система проверяет уникальность.</li>
+        <li>Добавить оборудование без номера нельзя.</li>
       </ul>
-      <p>Бот поддерживает голосовые сообщения — описание можно надиктовать.</p>
     </div>
 
     <div class="help-section">
-      <h3>3. Перечень оборудования</h3>
-      <p>Вкладка <strong>Перечень</strong> — таблица со всем оборудованием. Фильтры:</p>
+      <h3>3. Категории оборудования</h3>
+      <p>Оборудование классифицируется по двухуровневой системе:</p>
       <ul>
-        <li><strong>Поиск</strong> — по инвентарному номеру, описанию или комплексу</li>
+        <li><strong>Категория</strong> — основной тип (Климатическое, Строительное, Мебель и т.д.)</li>
+        <li><strong>Подкатегория</strong> — конкретный вид (Шкаф, Перфоратор, Кондиционер и т.д.)</li>
+      </ul>
+      <p>Примеры: Мебель → Шкаф, Климатическое → Кондиционер, Строительное → Перфоратор.</p>
+    </div>
+
+    <div class="help-section">
+      <h3>4. Спецификация (шильдик)</h3>
+      <p>При добавлении оборудования рекомендуется указывать данные с заводской таблички (шильдика):</p>
+      <ul>
+        <li><strong>Тип ТМЦ</strong> — полное наименование типа оборудования (напр. «Кондиционер настенный сплит-система»)</li>
+        <li><strong>Модель</strong> — модель и/или серийный номер с шильдика (напр. «Daikin FTXB35C»)</li>
+      </ul>
+      <p>Эти данные помогают точно идентифицировать оборудование при ремонте, заказе запчастей и списании.</p>
+    </div>
+
+    <div class="help-section">
+      <h3>5. Добавление оборудования (вкладка «Внести»)</h3>
+      <ol>
+        <li>Укажите <strong>Фамилию и Имя</strong> того, кто проводит операцию</li>
+        <li>Выберите <strong>комплекс</strong>, где находится оборудование</li>
+        <li>Введите <strong>инвентарный номер</strong> (система подставит следующий свободный)</li>
+        <li>Выберите <strong>категорию</strong> и <strong>подкатегорию</strong></li>
+        <li>Заполните <strong>Тип ТМЦ</strong> и <strong>Модель</strong> с шильдика (рекомендуется)</li>
+        <li>Укажите <strong>состояние</strong> и добавьте описание</li>
+        <li>Приложите ссылки на фото (наклейка, шильдик, общий вид)</li>
+      </ol>
+      <div class="note">Через Telegram-бот фото загружаются автоматически. В дашборде нужно вставить ссылки на уже загруженные фото из Битрикс24 Диска.</div>
+    </div>
+
+    <div class="help-section">
+      <h3>6. Перемещение оборудования (вкладка «Переместить»)</h3>
+      <ol>
+        <li>Укажите <strong>Фамилию и Имя</strong></li>
+        <li>Введите <strong>инвентарный номер</strong></li>
+        <li>Выберите <strong>откуда</strong> и <strong>куда</strong> перемещается</li>
+        <li>Укажите <strong>причину</strong> перемещения</li>
+        <li>При необходимости добавьте примечание</li>
+      </ol>
+      <p>В Telegram-боте дополнительно проверяется, что оборудование действительно числится на комплексе-источнике.</p>
+    </div>
+
+    <div class="help-section">
+      <h3>7. Списание оборудования (вкладка «Списать»)</h3>
+      <ol>
+        <li>Укажите <strong>Фамилию и Имя</strong> того, кто инициирует списание</li>
+        <li>Введите <strong>инвентарный номер</strong></li>
+        <li>Выберите <strong>причину</strong> списания (износ, поломка, утеря и т.д.)</li>
+        <li>Опишите обстоятельства</li>
+        <li>Приложите ссылку на фото</li>
+      </ol>
+      <p>После списания:</p>
+      <ul>
+        <li>Оборудование <strong>остаётся в перечне</strong> со статусом «Списано»</li>
+        <li>Формируется <strong>Акт списания</strong>, который можно распечатать или сохранить как PDF</li>
+        <li>Акт содержит все данные и подпись ответственного</li>
+      </ul>
+    </div>
+
+    <div class="help-section">
+      <h3>8. Просмотр и фильтрация (вкладка «Перечень»)</h3>
+      <p>Таблица со всем оборудованием. Доступные фильтры:</p>
+      <ul>
+        <li><strong>Поиск</strong> — по инвентарному номеру, описанию, типу ТМЦ или модели</li>
         <li><strong>Комплекс</strong> — фильтр по объекту</li>
         <li><strong>Категория</strong> — тип оборудования</li>
         <li><strong>Состояние</strong> — техническое состояние (включая «Списано»)</li>
         <li><strong>Ответственный</strong> — кто вносил запись</li>
       </ul>
-      <p>Кнопка <strong>↻ Обновить</strong> — перезагрузить данные из таблицы.</p>
+      <p>Кнопка <strong>&#8635; Обновить</strong> — перезагрузить данные из таблицы.</p>
     </div>
 
     <div class="help-section">
-      <h3>4. Перемещение оборудования</h3>
-      <p>Вкладка <strong>Переместить</strong> — форма перемещения:</p>
-      <ol>
-        <li>Введите инвентарный номер</li>
-        <li>Выберите откуда и куда перемещается</li>
-        <li>Укажите причину перемещения</li>
-        <li>При необходимости добавьте примечание</li>
-      </ol>
-      <p>В Telegram-боте дополнительно проверяется, что оборудование действительно находится на комплексе-источнике.</p>
+      <h3>9. Telegram-бот — команды</h3>
+      <ul>
+        <li><code>/start</code> — добавить новое оборудование (пошаговый ввод с фото)</li>
+        <li><code>/move</code> — оформить перемещение между комплексами</li>
+        <li><code>/writeoff</code> — списать оборудование (с фото и актом)</li>
+        <li><code>/find</code> — найти оборудование по инвентарному номеру</li>
+        <li><code>/dashboard</code> — открыть этот дашборд</li>
+        <li><code>/guide</code> — открыть эту инструкцию</li>
+        <li><code>/cancel</code> — отменить текущую операцию</li>
+      </ul>
+      <p>Бот поддерживает голосовые сообщения — описание можно надиктовать. Фото наклейки распознаётся автоматически (QR-код или OCR).</p>
     </div>
 
     <div class="help-section">
-      <h3>5. Списание оборудования</h3>
-      <p>Вкладка <strong>Списать</strong> — оформление акта списания:</p>
-      <ol>
-        <li>Введите инвентарный номер</li>
-        <li>Выберите причину списания (износ, поломка, утеря и т.д.)</li>
-        <li>Опишите обстоятельства</li>
-        <li>Укажите ФИО ответственного</li>
-        <li>Приложите ссылку на фото оборудования</li>
-      </ol>
-      <p>После списания оборудование <strong>остаётся в перечне</strong> со статусом «Списано». Акт можно распечатать.</p>
-    </div>
-
-    <div class="help-section">
-      <h3>6. Добавление оборудования</h3>
-      <p>Вкладка <strong>Внести</strong> — добавление нового оборудования:</p>
-      <ol>
-        <li>Выберите комплекс и категорию</li>
-        <li>Введите инвентарный номер (проверяется на уникальность)</li>
-        <li>Укажите состояние и описание</li>
-        <li>Приложите ссылки на фото (из Битрикс24 Диска)</li>
-      </ol>
-    </div>
-
-    <div class="help-section">
-      <h3>7. Комплексы</h3>
+      <h3>10. Спортивные комплексы</h3>
       <p>В системе зарегистрированы объекты:</p>
       <p><strong>Остров</strong>, <strong>Маяк</strong>, <strong>Юрловский</strong>, <strong>Косино</strong>, <strong>Арктика</strong>, <strong>Янтарь</strong></p>
+    </div>
+
+    <div class="help-section">
+      <h3>11. Частые вопросы</h3>
+      <ul>
+        <li><strong>Что делать, если номер уже занят?</strong> — Проверьте, не было ли оборудование уже внесено. Если это другое оборудование, используйте другой номер.</li>
+        <li><strong>Можно ли изменить данные после внесения?</strong> — Напрямую из дашборда нельзя. Обратитесь к администратору или отредактируйте Google Таблицу.</li>
+        <li><strong>Где хранятся фото?</strong> — На Битрикс24 Диске. В таблицу записываются ссылки на фото.</li>
+        <li><strong>Как найти списанное оборудование?</strong> — В фильтре «Состояние» выберите «Списано».</li>
+      </ul>
     </div>
   </div>
 </div>
@@ -466,7 +548,7 @@ const WRITEOFF_REASONS = [
 <script>
 // ─── Состояние ────────────────────────────────────────────────────────────────
 
-let allRows     = [];   // все строки листа "Оборудование" без заголовка
+let allRows     = [];
 let pageSize    = 50;
 let currentPage = 1;
 let debounceTimer = null;
@@ -483,9 +565,8 @@ document.addEventListener('DOMContentLoaded', () => {
     setStatus(false, 'не настроено');
   }
 
-  // Переход на вкладку по хешу в URL (для ссылок из бота)
   const hash = window.location.hash.replace('#', '');
-  if (['list','move','writeoff','add','help'].includes(hash)) {
+  if (['list','add','move','writeoff','help'].includes(hash)) {
     switchTab(hash);
   }
 });
@@ -494,13 +575,16 @@ function populateSelects() {
   fillSelectOpts('fComplex',   COMPLEXES,        true);
   fillSelectOpts('fCategory',  CATEGORIES,       true);
   fillSelectOpts('fCondition', CONDITIONS,        true);
+
+  fillSelectOpts('aComplex',   COMPLEXES,         false);
+  fillCategorySelect('aCategory');
+  fillSelectOpts('aCondition', CONDITIONS.filter(c => c !== 'Списано'), false);
+
   fillSelectOpts('mFrom',      COMPLEXES,         false);
   fillSelectOpts('mTo',        COMPLEXES,         false);
   fillSelectOpts('mReason',    MOVE_REASONS,      false);
+
   fillSelectOpts('wReason',    WRITEOFF_REASONS,  false);
-  fillSelectOpts('aComplex',   COMPLEXES,         false);
-  fillSelectOpts('aCategory',  CATEGORIES,        false);
-  fillSelectOpts('aCondition', CONDITIONS,         false);
 }
 
 function fillSelectOpts(id, items, addAll) {
@@ -513,13 +597,63 @@ function fillSelectOpts(id, items, addAll) {
   });
 }
 
+function fillCategorySelect(id) {
+  const sel = document.getElementById(id);
+  if (!sel) return;
+  sel.innerHTML = '<option value="">— выберите —</option>';
+  CATEGORIES.forEach(cat => {
+    const o = document.createElement('option');
+    o.value = cat; o.textContent = cat; sel.appendChild(o);
+  });
+}
+
+function updateSubcats(catId, subcatId) {
+  const cat = val(catId);
+  const sel = document.getElementById(subcatId);
+  if (!sel) return;
+  if (!cat || !CATEGORIES_TREE[cat]) {
+    sel.innerHTML = '<option value="">— сначала категория —</option>';
+    return;
+  }
+  sel.innerHTML = '<option value="">— выберите —</option>';
+  CATEGORIES_TREE[cat].forEach(s => {
+    const o = document.createElement('option');
+    o.value = s; o.textContent = s; sel.appendChild(o);
+  });
+}
+
 // ─── Переключение вкладок ─────────────────────────────────────────────────────
 
+const TAB_NAMES = ['list','add','move','writeoff','help'];
+
 function switchTab(name) {
-  const names = ['list','move','writeoff','add','help'];
-  document.querySelectorAll('.tab').forEach((t, i) => t.classList.toggle('active', names[i] === name));
+  document.querySelectorAll('.tab').forEach((t, i) => t.classList.toggle('active', TAB_NAMES[i] === name));
   document.querySelectorAll('.pane').forEach(p => p.classList.remove('active'));
   document.getElementById('pane-' + name).classList.add('active');
+  if (name === 'add') suggestNextInvNumber();
+}
+
+// ─── Автоподбор следующего инвентарного номера ─────────────────────────────────
+
+function suggestNextInvNumber() {
+  let maxNum = 0;
+  allRows.forEach(r => {
+    const inv = (r[CFG.eq.inv] || '').trim();
+    const match = inv.match(/(\d+)/);
+    if (match) {
+      const num = parseInt(match[1], 10);
+      if (num > maxNum) maxNum = num;
+    }
+  });
+  const next = String(maxNum + 1).padStart(3, '0');
+  const el = document.getElementById('aInv');
+  if (el && !el.value) {
+    el.value = next;
+  }
+  const hint = document.getElementById('aInvHint');
+  if (hint) {
+    hint.innerHTML = 'Следующий свободный номер: <strong>' + next + '</strong>. Номер должен совпадать с кодом на наклейке, которая клеится на оборудование.';
+  }
 }
 
 // ─── Загрузка из Google Sheets API v4 ────────────────────────────────────────
@@ -527,8 +661,8 @@ function switchTab(name) {
 async function loadEquipment() {
   if (!CFG.spreadsheetId || !CFG.apiKey) return;
 
-  const range = encodeURIComponent(`${CFG.sheetEq}!A:K`);
-  const url   = `https://sheets.googleapis.com/v4/spreadsheets/${CFG.spreadsheetId}/values/${range}?key=${CFG.apiKey}`;
+  const range = encodeURIComponent(CFG.sheetEq + '!A:N');
+  const url   = 'https://sheets.googleapis.com/v4/spreadsheets/' + CFG.spreadsheetId + '/values/' + range + '?key=' + CFG.apiKey;
 
   document.getElementById('tableContainer').innerHTML = '<div class="loading">Загрузка...</div>';
 
@@ -536,19 +670,18 @@ async function loadEquipment() {
     const resp = await fetch(url);
     if (!resp.ok) {
       const err = await resp.json().catch(() => ({}));
-      throw new Error(err.error?.message || `HTTP ${resp.status}`);
+      throw new Error(err.error?.message || 'HTTP ' + resp.status);
     }
     const data = await resp.json();
     const values = data.values || [];
-    // values[0] — заголовки, values[1:] — данные
     allRows = values.length > 1 ? values.slice(1) : [];
     currentPage = 1;
-    setStatus(true, `${allRows.length} записей`);
+    setStatus(true, allRows.length + ' записей');
     renderTable();
   } catch (e) {
     setStatus(false, 'ошибка');
     document.getElementById('tableContainer').innerHTML =
-      `<div class="empty">Ошибка загрузки:<br><code>${escHtml(e.message)}</code></div>`;
+      '<div class="empty">Ошибка загрузки:<br><code>' + escHtml(e.message) + '</code></div>';
   }
 }
 
@@ -573,7 +706,7 @@ function applyFilters(rows) {
     if (fCond     && g(CFG.eq.cond)    !== fCond)      return false;
     if (fUser     && !g(CFG.eq.user).includes(fUser))  return false;
     if (fSearch) {
-      const hay = [g(CFG.eq.inv), g(CFG.eq.desc), g(CFG.eq.complex)].join(' ');
+      const hay = [g(CFG.eq.inv), g(CFG.eq.desc), g(CFG.eq.complex), g(CFG.eq.typeTmc), g(CFG.eq.model)].join(' ');
       if (!hay.includes(fSearch)) return false;
     }
     return true;
@@ -606,32 +739,36 @@ function renderTable() {
     const photos = [r[c.ph1], r[c.ph2], r[c.ph3]].filter(Boolean);
     const photoHtml = photos.map((u, i) => {
       const lbl = ['наклейка','шильдик','общий'];
-      return `<a href="${escHtml(u)}" target="_blank">${lbl[i] || 'фото'}</a>`;
+      return '<a href="' + escHtml(u) + '" target="_blank">' + (lbl[i] || 'фото') + '</a>';
     }).join('');
 
-    return `<tr>
-      <td>${get(c.date)}</td>
-      <td class="inv">${get(c.inv)}</td>
-      <td>${get(c.complex)}</td>
-      <td>${get(c.cat)}</td>
-      <td>${condBadge(r[c.cond] || '')}</td>
-      <td style="max-width:260px">${get(c.desc)}</td>
-      <td class="photos">${photoHtml}</td>
-      <td>${get(c.user)}</td>
-    </tr>`;
+    // Категория + подкатегория
+    const catFull = get(c.cat) + (r[c.subcat] ? ' — ' + get(c.subcat) : '');
+
+    return '<tr>' +
+      '<td>' + get(c.date) + '</td>' +
+      '<td class="inv">' + get(c.inv) + '</td>' +
+      '<td>' + get(c.complex) + '</td>' +
+      '<td>' + catFull + '</td>' +
+      '<td>' + (get(c.typeTmc) || '') + '</td>' +
+      '<td>' + (get(c.model) || '') + '</td>' +
+      '<td>' + condBadge(r[c.cond] || '') + '</td>' +
+      '<td style="max-width:220px">' + get(c.desc) + '</td>' +
+      '<td class="photos">' + photoHtml + '</td>' +
+      '<td>' + get(c.user) + '</td>' +
+    '</tr>';
   }).join('');
 
-  document.getElementById('tableContainer').innerHTML = `
-    <div class="table-wrap">
-      <table>
-        <thead><tr>
-          <th>Дата</th><th>Инв.номер</th><th>Комплекс</th>
-          <th>Категория</th><th>Состояние</th><th>Описание</th>
-          <th>Фото</th><th>Кто вносил</th>
-        </tr></thead>
-        <tbody>${tbody}</tbody>
-      </table>
-    </div>`;
+  document.getElementById('tableContainer').innerHTML =
+    '<div class="table-wrap"><table>' +
+    '<thead><tr>' +
+      '<th>Дата</th><th>Инв.номер</th><th>Комплекс</th>' +
+      '<th>Категория</th><th>Тип ТМЦ</th><th>Модель</th>' +
+      '<th>Состояние</th><th>Описание</th>' +
+      '<th>Фото</th><th>Кто вносил</th>' +
+    '</tr></thead>' +
+    '<tbody>' + tbody + '</tbody>' +
+    '</table></div>';
 
   renderPagination(total, pages);
 }
@@ -645,24 +782,22 @@ function condBadge(cond) {
     ['Списано',         'badge-off'],
   ];
   const cls = map.find(([k]) => cond.startsWith(k))?.[1] || 'badge-neutral';
-  return `<span class="badge ${cls}">${escHtml(cond)}</span>`;
+  return '<span class="badge ' + cls + '">' + escHtml(cond) + '</span>';
 }
 
 function renderPagination(total, pages) {
   const pg = document.getElementById('pagination');
-  if (pages <= 1) { pg.innerHTML = `<span>${total} записей</span>`; return; }
-  pg.innerHTML = `
-    <span>${total} записей</span>
-    <button class="btn btn-ghost" onclick="goPage(${currentPage-1})" ${currentPage===1?'disabled':''}>‹</button>
-    <span>стр. ${currentPage} / ${pages}</span>
-    <button class="btn btn-ghost" onclick="goPage(${currentPage+1})" ${currentPage===pages?'disabled':''}>›</button>`;
+  if (pages <= 1) { pg.innerHTML = '<span>' + total + ' записей</span>'; return; }
+  pg.innerHTML =
+    '<span>' + total + ' записей</span>' +
+    '<button class="btn btn-ghost" onclick="goPage(' + (currentPage-1) + ')" ' + (currentPage===1?'disabled':'') + '>&#8249;</button>' +
+    '<span>стр. ' + currentPage + ' / ' + pages + '</span>' +
+    '<button class="btn btn-ghost" onclick="goPage(' + (currentPage+1) + ')" ' + (currentPage===pages?'disabled':'') + '>&#8250;</button>';
 }
 
 function goPage(p) { currentPage = p; renderTable(); }
 
 // ─── Запись через Apps Script ─────────────────────────────────────────────────
-// Apps Script должен быть задеплоен с доступом "Все (в т.ч. анонимные)"
-// и обрабатывать POST-запросы (см. apps_script.gs)
 
 async function appsScriptPost(payload) {
   if (!CFG.appsScriptUrl) {
@@ -671,65 +806,108 @@ async function appsScriptPost(payload) {
   }
   const resp = await fetch(CFG.appsScriptUrl, {
     method: 'POST',
-    headers: { 'Content-Type': 'text/plain' },  // Apps Script не принимает application/json с preflight
+    headers: { 'Content-Type': 'text/plain' },
     body: JSON.stringify(payload),
   });
-  if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+  if (!resp.ok) throw new Error('HTTP ' + resp.status);
   const data = await resp.json();
   if (data.status !== 'ok') throw new Error(data.message || 'Ошибка Apps Script');
-  return true;
+  return data;
+}
+
+// ─── Форма: Внести ────────────────────────────────────────────────────────────
+
+async function submitAdd() {
+  const user      = val('aUser');
+  const complex   = val('aComplex');
+  const inv       = val('aInv');
+  const category  = val('aCategory');
+  const subcat    = val('aSubcat');
+  const typeTmc   = val('aTypeTmc');
+  const model     = val('aModel');
+  const condition = val('aCondition');
+  const desc      = val('aDesc');
+  const ph1       = val('aPh1');
+  const ph2       = val('aPh2');
+  const ph3       = val('aPh3');
+
+  if (!user)      { toast('Укажите Фамилию и Имя', 'err'); return; }
+  if (!complex || !inv || !category || !subcat || !condition) {
+    toast('Заполните все обязательные поля (комплекс, номер, категория, подкатегория, состояние)', 'err'); return;
+  }
+
+  try {
+    await appsScriptPost({
+      action: 'add_equipment', user, complex, inv, category, subcat,
+      type_tmc: typeTmc, model, condition, desc, ph1, ph2, ph3
+    });
+    toast('Оборудование ' + inv + ' добавлено', 'ok');
+    resetAdd();
+    loadEquipment();
+  } catch (e) { toast('Ошибка: ' + e.message, 'err'); }
+}
+
+function resetAdd() {
+  ['aUser','aInv','aDesc','aPh1','aPh2','aPh3','aTypeTmc','aModel'].forEach(id => setVal(id, ''));
+  ['aComplex','aCategory','aCondition'].forEach(id => setVal(id, ''));
+  const subcatSel = document.getElementById('aSubcat');
+  if (subcatSel) subcatSel.innerHTML = '<option value="">— сначала категория —</option>';
 }
 
 // ─── Форма: Переместить ───────────────────────────────────────────────────────
 
 async function submitMove() {
+  const user   = val('mUser');
   const inv    = val('mInv');
   const from_  = val('mFrom');
   const to_    = val('mTo');
   const reason = val('mReason');
   const note   = val('mNote');
 
+  if (!user)                          { toast('Укажите Фамилию и Имя', 'err'); return; }
   if (!inv || !from_ || !to_ || !reason) { toast('Заполните обязательные поля', 'err'); return; }
-  if (from_ === to_)                      { toast('«Откуда» и «Куда» совпадают',  'err'); return; }
+  if (from_ === to_)                  { toast('«Откуда» и «Куда» совпадают',  'err'); return; }
 
   try {
-    await appsScriptPost({ action: 'move', inv, from: from_, to: to_, reason, note });
-    toast(`Перемещение ${inv} сохранено`, 'ok');
+    await appsScriptPost({ action: 'move', user, inv, from: from_, to: to_, reason, note });
+    toast('Перемещение ' + inv + ' сохранено', 'ok');
     resetMove();
     loadEquipment();
-  } catch (e) { toast(`Ошибка: ${e.message}`, 'err'); }
+  } catch (e) { toast('Ошибка: ' + e.message, 'err'); }
 }
 
 function resetMove() {
-  ['mInv','mNote'].forEach(id => setVal(id, ''));
+  ['mUser','mInv','mNote'].forEach(id => setVal(id, ''));
   ['mFrom','mTo','mReason'].forEach(id => setVal(id, ''));
 }
 
 // ─── Форма: Списать ───────────────────────────────────────────────────────────
 
 async function submitWriteoff() {
+  const who    = val('wWho');
   const inv    = val('wInv');
   const reason = val('wReason');
   const desc   = val('wDesc');
-  const who    = val('wWho');
   const photo  = val('wPhoto');
 
-  if (!inv || !reason || !who) { toast('Заполните обязательные поля (номер, причина, ФИО)', 'err'); return; }
+  if (!who)              { toast('Укажите Фамилию и Имя', 'err'); return; }
+  if (!inv || !reason)   { toast('Заполните обязательные поля (номер, причина)', 'err'); return; }
 
   try {
     const result = await appsScriptPost({ action: 'writeoff', inv, reason, desc, who, photo });
-    toast(`Оборудование ${inv} списано`, 'ok');
+    toast('Оборудование ' + inv + ' списано', 'ok');
     showWriteoffAct({
       inv, reason, desc, who, photo,
+      actNumber: result.actNumber || '',
       date: new Date().toLocaleString('ru-RU', { dateStyle: 'short', timeStyle: 'short' }),
     });
     resetWriteoff();
     loadEquipment();
-  } catch (e) { toast(`Ошибка: ${e.message}`, 'err'); }
+  } catch (e) { toast('Ошибка: ' + e.message, 'err'); }
 }
 
 function resetWriteoff() {
-  ['wInv','wDesc','wWho','wPhoto'].forEach(id => setVal(id, ''));
+  ['wWho','wInv','wDesc','wPhoto'].forEach(id => setVal(id, ''));
   setVal('wReason', '');
 }
 
@@ -743,61 +921,46 @@ function showWriteoffAct(data) {
 }
 
 function buildActHtml(d) {
-  return `
-    <div style="font-family: 'Times New Roman', serif; color: #000; background: #fff; padding: 30px; border-radius: 4px; line-height: 1.8;">
-      <h2 style="text-align:center; margin-bottom:6px; font-size:18px;">АКТ СПИСАНИЯ ОБОРУДОВАНИЯ</h2>
-      <p style="text-align:center; margin-bottom:24px; color:#666; font-size:13px;">от ${escHtml(d.date)}</p>
-      <table style="width:100%; border-collapse:collapse; font-size:14px;">
-        <tr><td style="padding:6px 10px; border:1px solid #ccc; width:200px; background:#f5f5f5;"><strong>Инвентарный номер</strong></td><td style="padding:6px 10px; border:1px solid #ccc;">${escHtml(d.inv)}</td></tr>
-        <tr><td style="padding:6px 10px; border:1px solid #ccc; background:#f5f5f5;"><strong>Причина списания</strong></td><td style="padding:6px 10px; border:1px solid #ccc;">${escHtml(d.reason)}</td></tr>
-        <tr><td style="padding:6px 10px; border:1px solid #ccc; background:#f5f5f5;"><strong>Описание</strong></td><td style="padding:6px 10px; border:1px solid #ccc;">${escHtml(d.desc || '—')}</td></tr>
-        <tr><td style="padding:6px 10px; border:1px solid #ccc; background:#f5f5f5;"><strong>Кто списывает</strong></td><td style="padding:6px 10px; border:1px solid #ccc;">${escHtml(d.who)}</td></tr>
-        ${d.photo ? `<tr><td style="padding:6px 10px; border:1px solid #ccc; background:#f5f5f5;"><strong>Фото</strong></td><td style="padding:6px 10px; border:1px solid #ccc;"><a href="${escHtml(d.photo)}" target="_blank">ссылка на фото</a></td></tr>` : ''}
-      </table>
-      <div style="margin-top:40px; display:flex; justify-content:space-between; font-size:14px;">
-        <div>Подпись: _________________ / ${escHtml(d.who)} /</div>
-        <div>Дата: ${escHtml(d.date)}</div>
-      </div>
-    </div>`;
+  return '<div style="font-family: \'Times New Roman\', serif; color: #000; background: #fff; padding: 30px; border-radius: 4px; line-height: 1.8;" id="actPrintArea">' +
+    '<h2 style="text-align:center; margin-bottom:6px; font-size:18px;">АКТ СПИСАНИЯ ОБОРУДОВАНИЯ</h2>' +
+    '<p style="text-align:center; margin-bottom:4px; font-size:14px;">' + escHtml(d.actNumber || '') + '</p>' +
+    '<p style="text-align:center; margin-bottom:24px; color:#666; font-size:13px;">от ' + escHtml(d.date) + '</p>' +
+    '<table style="width:100%; border-collapse:collapse; font-size:14px;">' +
+      '<tr><td style="padding:6px 10px; border:1px solid #ccc; width:200px; background:#f5f5f5;"><strong>Инвентарный номер</strong></td><td style="padding:6px 10px; border:1px solid #ccc;">' + escHtml(d.inv) + '</td></tr>' +
+      '<tr><td style="padding:6px 10px; border:1px solid #ccc; background:#f5f5f5;"><strong>Причина списания</strong></td><td style="padding:6px 10px; border:1px solid #ccc;">' + escHtml(d.reason) + '</td></tr>' +
+      '<tr><td style="padding:6px 10px; border:1px solid #ccc; background:#f5f5f5;"><strong>Описание</strong></td><td style="padding:6px 10px; border:1px solid #ccc;">' + escHtml(d.desc || '---') + '</td></tr>' +
+      '<tr><td style="padding:6px 10px; border:1px solid #ccc; background:#f5f5f5;"><strong>Кто списывает</strong></td><td style="padding:6px 10px; border:1px solid #ccc;">' + escHtml(d.who) + '</td></tr>' +
+      (d.photo ? '<tr><td style="padding:6px 10px; border:1px solid #ccc; background:#f5f5f5;"><strong>Фото</strong></td><td style="padding:6px 10px; border:1px solid #ccc;"><a href="' + escHtml(d.photo) + '" target="_blank">ссылка на фото</a></td></tr>' : '') +
+    '</table>' +
+    '<div style="margin-top:40px; display:flex; justify-content:space-between; font-size:14px;">' +
+      '<div>Подпись: _________________ / ' + escHtml(d.who) + ' /</div>' +
+      '<div>Дата: ' + escHtml(d.date) + '</div>' +
+    '</div>' +
+    '<div style="margin-top:20px; font-size:12px; color:#999; text-align:center;">Организация: ООО «Спорт всегда»</div>' +
+  '</div>';
 }
 
 function printAct() {
   const content = document.getElementById('woActContent').innerHTML;
   const w = window.open('', '_blank', 'width=800,height=600');
-  w.document.write(`<!DOCTYPE html><html><head><meta charset="UTF-8"><title>Акт списания</title>
-    <style>body{font-family:'Times New Roman',serif;padding:40px;} @media print{body{padding:20px;}}</style>
-    </head><body>${content}</body></html>`);
+  w.document.write('<!DOCTYPE html><html><head><meta charset="UTF-8"><title>Акт списания</title>' +
+    '<style>body{font-family:"Times New Roman",serif;padding:40px;} @media print{body{padding:20px;}}</style>' +
+    '</head><body>' + content + '</body></html>');
   w.document.close();
   setTimeout(() => w.print(), 300);
 }
 
-// ─── Форма: Внести ────────────────────────────────────────────────────────────
-
-async function submitAdd() {
-  const complex   = val('aComplex');
-  const inv       = val('aInv');
-  const category  = val('aCategory');
-  const condition = val('aCondition');
-  const desc      = val('aDesc');
-  const ph1       = val('aPh1');
-  const ph2       = val('aPh2');
-  const ph3       = val('aPh3');
-
-  if (!complex || !inv || !category || !condition) {
-    toast('Заполните обязательные поля', 'err'); return;
-  }
-
-  try {
-    await appsScriptPost({ action: 'add_equipment', complex, inv, category, condition, desc, ph1, ph2, ph3 });
-    toast(`Оборудование ${inv} добавлено`, 'ok');
-    resetAdd();
-    loadEquipment();
-  } catch (e) { toast(`Ошибка: ${e.message}`, 'err'); }
-}
-
-function resetAdd() {
-  ['aInv','aDesc','aPh1','aPh2','aPh3'].forEach(id => setVal(id, ''));
-  ['aComplex','aCategory','aCondition'].forEach(id => setVal(id, ''));
+function saveActPdf() {
+  // Открываем акт в новом окне с подсказкой сохранить как PDF
+  const content = document.getElementById('woActContent').innerHTML;
+  const w = window.open('', '_blank', 'width=800,height=600');
+  w.document.write('<!DOCTYPE html><html><head><meta charset="UTF-8"><title>Акт списания — сохранить как PDF</title>' +
+    '<style>body{font-family:"Times New Roman",serif;padding:40px;} .pdf-hint{background:#fff3cd;padding:12px;border-radius:6px;margin-bottom:20px;font-size:14px;text-align:center;font-family:sans-serif;} @media print{.pdf-hint{display:none;} body{padding:20px;}}</style>' +
+    '</head><body>' +
+    '<div class="pdf-hint">Для сохранения как PDF: нажмите <strong>Ctrl+P</strong> (или Cmd+P на Mac), в поле «Принтер» выберите <strong>«Сохранить как PDF»</strong></div>' +
+    content + '</body></html>');
+  w.document.close();
+  setTimeout(() => w.print(), 500);
 }
 
 // ─── Утилиты ──────────────────────────────────────────────────────────────────
@@ -815,10 +978,11 @@ function setStatus(ok, text) {
 }
 
 let toastTimer = null;
-function toast(msg, type = 'info') {
+function toast(msg, type) {
+  type = type || 'info';
   const el = document.getElementById('toast');
   el.textContent = msg;
-  el.className   = `show toast-${type}`;
+  el.className   = 'show toast-' + type;
   clearTimeout(toastTimer);
   toastTimer = setTimeout(() => { el.className = ''; }, 3500);
 }

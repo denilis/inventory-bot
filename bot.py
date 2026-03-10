@@ -51,7 +51,8 @@ SHEET_EQUIPMENT  = "Оборудование"        # A=Дата, B=Кто вн
                                           # D=Инв.номер, E=Категория, F=Состояние,
                                           # G=Описание, H=Расположение (пусто),
                                           # I=Фото наклейки, J=Фото шильдика,
-                                          # K=Фото общего вида, L=Голосовое (пусто)
+                                          # K=Фото общего вида,
+                                          # L=Подкатегория, M=Тип ТМЦ, N=Модель
 SHEET_MOVEMENTS  = "Журнал перемещений"  # A=Дата, B=Кто, C=Инв.номер,
                                           # D=Откуда, E=Куда, F=Причина, G=Примечание
 SHEET_WRITEOFFS  = "Акты списания"      # A=Дата, B=№ акта, C=Инв.номер,
@@ -68,15 +69,36 @@ SPORT_COMPLEXES = [
     "Остров", "Маяк", "Юрловский", "Косино", "Арктика", "Янтарь",
 ]
 
-CATEGORIES = [
-    "Климатическое (чиллеры, пушки, кондиционеры)",
-    "Строительное (фены, перфораторы, болгарки)",
-    "Уборочное (пылесосы, мойки, поломоечные)",
-    "Электрика (генераторы, удлинители, щитки)",
-    "Спортивное оборудование",
-    "Мебель и инвентарь",
-    "Другое",
-]
+# Иерархические категории: категория → [подкатегории]
+CATEGORIES_TREE = {
+    "Климатическое": [
+        "Чиллер", "Тепловая пушка", "Кондиционер", "Обогреватель",
+        "Вентилятор", "Другое",
+    ],
+    "Строительное": [
+        "Перфоратор", "Болгарка (УШМ)", "Шуруповёрт", "Строительный фен",
+        "Дрель", "Бетономешалка", "Другое",
+    ],
+    "Уборочное": [
+        "Пылесос", "Мойка высокого давления", "Поломоечная машина",
+        "Снегоуборщик", "Другое",
+    ],
+    "Электрика": [
+        "Генератор", "Удлинитель", "Электрощиток", "Светильник", "Другое",
+    ],
+    "Спортивное оборудование": [
+        "Тренажёр", "Спортивный инвентарь", "Другое",
+    ],
+    "Мебель": [
+        "Шкаф", "Стол", "Стул", "Стеллаж", "Тумба", "Скамейка", "Диван", "Другое",
+    ],
+    "Инвентарь": [
+        "Лопата", "Метла", "Ведро", "Тележка", "Стремянка", "Другое",
+    ],
+    "Другое": ["Другое"],
+}
+
+CATEGORIES = list(CATEGORIES_TREE.keys())
 
 CONDITIONS = [
     "Отличное — работает без замечаний",
@@ -167,13 +189,16 @@ def _open_writeoff_sheet() -> gspread.Worksheet:
 # ─── FSM ──────────────────────────────────────────────────────────────────────
 
 class Form(StatesGroup):
-    choose_complex   = State()   # 1. Выбор комплекса
-    photos           = State()   # 2. Сбор фото (ждём до 3 штук)
-    inv_number       = State()   # 3. Инвентарный номер
-    choose_category  = State()   # 4. Категория
-    choose_condition = State()   # 5. Состояние
-    description      = State()   # 6. Описание
-    confirm          = State()   # Подтверждение
+    choose_complex      = State()   # 1. Выбор комплекса
+    photos              = State()   # 2. Сбор фото (ждём до 3 штук)
+    inv_number          = State()   # 3. Инвентарный номер (обязательный)
+    choose_category     = State()   # 4. Категория
+    choose_subcategory  = State()   # 5. Подкатегория
+    type_tmc            = State()   # 6. Тип ТМЦ (с шильдика)
+    model               = State()   # 7. Модель (с шильдика)
+    choose_condition    = State()   # 8. Состояние
+    description         = State()   # 9. Описание
+    confirm             = State()   # Подтверждение
 
 
 class FindForm(StatesGroup):
@@ -253,6 +278,46 @@ async def ocr_with_gpt(image_bytes: bytes) -> str | None:
     return None
 
 
+async def ocr_nameplate(image_bytes: bytes) -> dict:
+    """Считывает тип и модель с фото шильдика через GPT-4o Vision.
+    Возвращает {'type_tmc': ..., 'model': ...}."""
+    if not openai_client:
+        return {}
+    try:
+        b64 = base64.b64encode(image_bytes).decode()
+        resp = await openai_client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[{
+                "role": "user",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": (
+                            "На фото заводская табличка (шильдик) оборудования. "
+                            "Прочитай и верни JSON с двумя полями:\n"
+                            '{"type_tmc": "тип/название оборудования", "model": "модель"}\n'
+                            "Если данные не видны — верни пустые строки."
+                        ),
+                    },
+                    {
+                        "type": "image_url",
+                        "image_url": {"url": f"data:image/jpeg;base64,{b64}"},
+                    },
+                ],
+            }],
+            max_tokens=100,
+        )
+        text = resp.choices[0].message.content.strip()
+        # Пробуем распарсить JSON
+        if "{" in text:
+            start = text.index("{")
+            end = text.rindex("}") + 1
+            return json.loads(text[start:end])
+    except Exception as e:
+        log.error(f"GPT nameplate OCR: {e}")
+    return {}
+
+
 async def transcribe_voice(bot: Bot, file_id: str) -> str:
     """Расшифровывает голосовое сообщение через Whisper. Возвращает текст."""
     if not openai_client:
@@ -282,6 +347,23 @@ async def upload_to_bitrix(bot: Bot, file_id: str, filename: str) -> str:
     file_id_bx = int(uploaded["ID"])
     link = await bx.get_file_public_link(file_id_bx)
     return link or uploaded.get("DOWNLOAD_URL", "")
+
+
+async def _suggest_next_inv() -> str:
+    """Подсказывает следующий свободный инв. номер (макс.число + 1, дополненный до 3 цифр)."""
+    import re
+    def _calc():
+        sheet = _open_eq_sheet()
+        values = sheet.col_values(4)  # col D
+        max_num = 0
+        for v in values[1:]:
+            match = re.search(r"(\d+)", v.strip())
+            if match:
+                num = int(match.group(1))
+                if num > max_num:
+                    max_num = num
+        return str(max_num + 1).zfill(3)
+    return await asyncio.to_thread(_calc)
 
 
 # ─── Роутер ───────────────────────────────────────────────────────────────────
@@ -351,7 +433,8 @@ async def cmd_guide(message: Message):
 async def step_complex(cb: CallbackQuery, state: FSMContext):
     idx = int(cb.data.split(":")[1])
     complex_name = SPORT_COMPLEXES[idx]
-    await state.update_data(complex=complex_name, photos=[], ocr_done=False)
+    await state.update_data(complex=complex_name, photos=[], ocr_done=False,
+                            nameplate_data={})
     await cb.message.answer(
         f"Комплекс: {complex_name}\n\n"
         "Сфотографируйте оборудование — нужно 3 фото:\n"
@@ -375,12 +458,13 @@ async def step_photo(message: Message, state: FSMContext):
     data = await state.get_data()
     photos: list = data.get("photos", [])
     ocr_done: bool = data.get("ocr_done", False)
+    nameplate_data: dict = data.get("nameplate_data", {})
 
     file_id = message.photo[-1].file_id
     photos.append(file_id)
     count = len(photos)
 
-    # OCR на первом фото (наклейка)
+    # OCR на первом фото (наклейка) — инвентарный номер
     inv_from_ocr = None
     if not ocr_done and count == 1:
         try:
@@ -393,6 +477,18 @@ async def step_photo(message: Message, state: FSMContext):
         if inv_from_ocr:
             await state.update_data(inv_number=inv_from_ocr, ocr_done=True)
 
+    # OCR на втором фото (шильдик) — тип и модель
+    if count == 2 and not nameplate_data:
+        try:
+            tg_file = await message.bot.get_file(file_id)
+            raw = await message.bot.download_file(tg_file.file_path)
+            img_bytes = raw.read()
+            nameplate_data = await ocr_nameplate(img_bytes)
+        except Exception as e:
+            log.warning(f"Nameplate OCR failed: {e}")
+        if nameplate_data:
+            await state.update_data(nameplate_data=nameplate_data)
+
     await state.update_data(photos=photos, ocr_done=ocr_done or bool(inv_from_ocr))
 
     if count < PHOTOS_NEEDED:
@@ -400,6 +496,11 @@ async def step_photo(message: Message, state: FSMContext):
         status = f"Фото {count} из {PHOTOS_NEEDED} получено."
         if inv_from_ocr:
             status += f" Номер считан: {inv_from_ocr}"
+        if count == 2 and nameplate_data:
+            np_type = nameplate_data.get("type_tmc", "")
+            np_model = nameplate_data.get("model", "")
+            if np_type or np_model:
+                status += f"\nС шильдика: {np_type} {np_model}".strip()
         await message.answer(
             f"{status}\n"
             f"Осталось фото: {remaining}. Продолжайте или /done."
@@ -428,20 +529,29 @@ async def step_photos_skip(message: Message, state: FSMContext):
 async def _ask_inv_number(message: Message, state: FSMContext):
     data = await state.get_data()
     inv = data.get("inv_number")
+
+    # Подсказываем следующий свободный номер
+    try:
+        suggested = await _suggest_next_inv()
+    except Exception:
+        suggested = None
+
     if inv:
-        await message.answer(
-            f"Инвентарный номер считан автоматически: {inv}\n\n"
-            "Введите другой номер, если неверно, или /skip чтобы оставить."
-        )
+        hint = f"Инвентарный номер считан автоматически: <b>{inv}</b>\n\n"
+        if suggested:
+            hint += f"(Подсказка: следующий свободный — {suggested})\n\n"
+        hint += "Введите другой номер, если неверно, или отправьте /ok чтобы подтвердить."
     else:
-        await message.answer(
-            "Введите инвентарный номер (например: INV-001, А-123).\n"
-            "/skip — если номер не присвоен."
-        )
+        hint = "Введите инвентарный номер (обязательное поле).\n"
+        if suggested:
+            hint += f"\nПодсказка: следующий свободный — <b>{suggested}</b>"
+        hint += "\n\nНомер должен совпадать с номером на наклейке оборудования."
+
+    await message.answer(hint, parse_mode="HTML")
     await state.set_state(Form.inv_number)
 
 
-# ── Шаг 3: Инвентарный номер ──────────────────────────────────────────────────
+# ── Шаг 3: Инвентарный номер (обязательный) ─────────────────────────────────
 
 async def _inv_exists(inv: str) -> bool:
     """True если инвентарный номер уже есть в таблице оборудования."""
@@ -454,32 +564,37 @@ async def _inv_exists(inv: str) -> bool:
     return await asyncio.to_thread(_check)
 
 
-@router.message(Form.inv_number, Command("skip"))
-async def step_inv_skip(message: Message, state: FSMContext):
+@router.message(Form.inv_number, Command("ok"))
+async def step_inv_ok(message: Message, state: FSMContext):
+    """Подтверждение OCR-номера через /ok."""
     data = await state.get_data()
     inv = data.get("inv_number")
     if not inv:
-        await state.update_data(inv_number="—")
-    else:
-        # Пользователь подтверждает номер с OCR через /skip — проверяем дубликат
-        if await _inv_exists(inv):
-            await state.update_data(inv_number=None, ocr_done=False)
-            await message.answer(
-                f"⚠️ Номер <b>{inv}</b> уже зарегистрирован в таблице.\n\n"
-                "Введите другой номер вручную или /skip чтобы добавить без номера.",
-                parse_mode="HTML",
-            )
-            return
+        await message.answer(
+            "Номер не задан. Введите инвентарный номер вручную."
+        )
+        return
+    if await _inv_exists(inv):
+        await state.update_data(inv_number=None, ocr_done=False)
+        await message.answer(
+            f"Номер <b>{inv}</b> уже зарегистрирован в таблице.\n\n"
+            "Введите другой номер.",
+            parse_mode="HTML",
+        )
+        return
     await _ask_category(message, state)
 
 
 @router.message(Form.inv_number)
 async def step_inv_number(message: Message, state: FSMContext):
     inv = message.text.strip()
+    if not inv:
+        await message.answer("Инвентарный номер обязателен. Введите номер.")
+        return
     if await _inv_exists(inv):
         await message.answer(
-            f"⚠️ Номер <b>{inv}</b> уже зарегистрирован в таблице.\n\n"
-            "Введите другой номер или /skip чтобы добавить без номера.",
+            f"Номер <b>{inv}</b> уже зарегистрирован в таблице.\n\n"
+            "Введите другой номер.",
             parse_mode="HTML",
         )
         return  # остаёмся в состоянии Form.inv_number
@@ -500,16 +615,122 @@ async def _ask_category(message: Message, state: FSMContext):
 @router.callback_query(Form.choose_category, F.data.startswith("cat:"))
 async def step_category(cb: CallbackQuery, state: FSMContext):
     idx = int(cb.data.split(":")[1])
-    await state.update_data(category=CATEGORIES[idx])
-    await cb.message.answer(
+    cat = CATEGORIES[idx]
+    subcats = CATEGORIES_TREE.get(cat, ["Другое"])
+    await state.update_data(category=cat)
+
+    if len(subcats) == 1 and subcats[0] == "Другое":
+        # Единственная подкатегория — пропускаем выбор
+        await state.update_data(subcategory="Другое")
+        await _ask_type_tmc(cb.message, state)
+    else:
+        await cb.message.answer(
+            f"Категория: {cat}\n\nВыберите подкатегорию:",
+            reply_markup=inline_kb(subcats, "subcat"),
+        )
+        await state.set_state(Form.choose_subcategory)
+    await cb.answer()
+
+
+# ── Шаг 5: Подкатегория ─────────────────────────────────────────────────────
+
+@router.callback_query(Form.choose_subcategory, F.data.startswith("subcat:"))
+async def step_subcategory(cb: CallbackQuery, state: FSMContext):
+    idx = int(cb.data.split(":")[1])
+    data = await state.get_data()
+    cat = data.get("category", "")
+    subcats = CATEGORIES_TREE.get(cat, ["Другое"])
+    subcat = subcats[idx] if idx < len(subcats) else "Другое"
+    await state.update_data(subcategory=subcat)
+    await _ask_type_tmc(cb.message, state)
+    await cb.answer()
+
+
+# ── Шаг 6: Тип ТМЦ ──────────────────────────────────────────────────────────
+
+async def _ask_type_tmc(message: Message, state: FSMContext):
+    data = await state.get_data()
+    nameplate = data.get("nameplate_data", {})
+    np_type = nameplate.get("type_tmc", "")
+
+    hint = "Укажите тип/название оборудования (с шильдика).\n"
+    if np_type:
+        hint += f"\nСчитано с фото: <b>{np_type}</b>\n/ok — подтвердить, или введите вручную."
+        await state.update_data(type_tmc=np_type)
+    else:
+        hint += "\nНапример: «Кондиционер сплит-система», «Перфоратор».\n/skip — пропустить."
+    await message.answer(hint, parse_mode="HTML")
+    await state.set_state(Form.type_tmc)
+
+
+@router.message(Form.type_tmc, Command("ok"))
+async def step_type_ok(message: Message, state: FSMContext):
+    data = await state.get_data()
+    if data.get("type_tmc"):
+        await _ask_model(message, state)
+    else:
+        await message.answer("Тип не задан. Введите тип оборудования или /skip.")
+
+
+@router.message(Form.type_tmc, Command("skip"))
+async def step_type_skip(message: Message, state: FSMContext):
+    await state.update_data(type_tmc="—")
+    await _ask_model(message, state)
+
+
+@router.message(Form.type_tmc)
+async def step_type_text(message: Message, state: FSMContext):
+    await state.update_data(type_tmc=message.text.strip())
+    await _ask_model(message, state)
+
+
+# ── Шаг 7: Модель ───────────────────────────────────────────────────────────
+
+async def _ask_model(message: Message, state: FSMContext):
+    data = await state.get_data()
+    nameplate = data.get("nameplate_data", {})
+    np_model = nameplate.get("model", "")
+
+    hint = "Укажите модель оборудования (с шильдика).\n"
+    if np_model:
+        hint += f"\nСчитано с фото: <b>{np_model}</b>\n/ok — подтвердить, или введите вручную."
+        await state.update_data(model=np_model)
+    else:
+        hint += "\nНапример: «MDV-12HRN1», «ТЭП-3000К».\n/skip — пропустить."
+    await message.answer(hint, parse_mode="HTML")
+    await state.set_state(Form.model)
+
+
+@router.message(Form.model, Command("ok"))
+async def step_model_ok(message: Message, state: FSMContext):
+    data = await state.get_data()
+    if data.get("model"):
+        await _ask_condition(message, state)
+    else:
+        await message.answer("Модель не задана. Введите модель или /skip.")
+
+
+@router.message(Form.model, Command("skip"))
+async def step_model_skip(message: Message, state: FSMContext):
+    await state.update_data(model="—")
+    await _ask_condition(message, state)
+
+
+@router.message(Form.model)
+async def step_model_text(message: Message, state: FSMContext):
+    await state.update_data(model=message.text.strip())
+    await _ask_condition(message, state)
+
+
+# ── Шаг 8: Состояние ────────────────────────────────────────────────────────
+
+async def _ask_condition(message: Message, state: FSMContext):
+    await message.answer(
         "Укажите состояние оборудования:",
         reply_markup=inline_kb(CONDITIONS, "cond"),
     )
     await state.set_state(Form.choose_condition)
-    await cb.answer()
 
-
-# ── Шаг 5: Состояние ──────────────────────────────────────────────────────────
 
 @router.callback_query(Form.choose_condition, F.data.startswith("cond:"))
 async def step_condition(cb: CallbackQuery, state: FSMContext):
@@ -524,7 +745,7 @@ async def step_condition(cb: CallbackQuery, state: FSMContext):
     await cb.answer()
 
 
-# ── Шаг 6: Описание ───────────────────────────────────────────────────────────
+# ── Шаг 9: Описание ─────────────────────────────────────────────────────────
 
 @router.message(Form.description, F.voice)
 async def step_description_voice(message: Message, state: FSMContext):
@@ -559,12 +780,15 @@ async def _show_summary(message: Message, state: FSMContext):
 
     text = (
         "Проверьте данные:\n\n"
-        f"Комплекс:   {data.get('complex', '—')}\n"
-        f"Инв. номер: {data.get('inv_number', '—')}\n"
-        f"Категория:  {data.get('category', '—')}\n"
-        f"Состояние:  {data.get('condition', '—')}\n"
-        f"Описание:   {data.get('description', '—')}\n"
-        f"Фото:       {photo_count} шт.\n"
+        f"Комплекс:      {data.get('complex', '—')}\n"
+        f"Инв. номер:    {data.get('inv_number', '—')}\n"
+        f"Категория:     {data.get('category', '—')}\n"
+        f"Подкатегория:  {data.get('subcategory', '—')}\n"
+        f"Тип ТМЦ:       {data.get('type_tmc', '—')}\n"
+        f"Модель:        {data.get('model', '—')}\n"
+        f"Состояние:     {data.get('condition', '—')}\n"
+        f"Описание:      {data.get('description', '—')}\n"
+        f"Фото:          {photo_count} шт.\n"
     )
     kb = InlineKeyboardMarkup(inline_keyboard=[[
         InlineKeyboardButton(text="Сохранить", callback_data="confirm:yes"),
@@ -597,9 +821,10 @@ async def step_confirm_yes(cb: CallbackQuery, state: FSMContext, bot: Bot):
         except Exception as e:
             log.error(f"Загрузка фото {label}: {e}")
 
-    # Строка для листа "Оборудование" (совместима со старой структурой таблицы)
-    # A=Дата, B=Кто вносил, C=Комплекс, D=Инв.номер, E=Категория, F=Состояние,
-    # G=Описание, H=Расположение (пусто), I=Фото наклейки, J=Шильдик, K=Общий вид
+    # Строка для листа "Оборудование"
+    # A=Дата, B=Кто, C=Комплекс, D=Инв.номер, E=Категория, F=Состояние,
+    # G=Описание, H=Расположение (пусто), I=Фото1, J=Фото2, K=Фото3,
+    # L=Подкатегория, M=Тип ТМЦ, N=Модель
     row = [
         now,
         user_name,
@@ -612,6 +837,9 @@ async def step_confirm_yes(cb: CallbackQuery, state: FSMContext, bot: Bot):
         photo_links[0],   # I: Фото наклейки
         photo_links[1],   # J: Фото шильдика
         photo_links[2],   # K: Фото общего вида
+        data.get("subcategory", ""),   # L: Подкатегория
+        data.get("type_tmc", ""),      # M: Тип ТМЦ
+        data.get("model", ""),         # N: Модель
     ]
 
     try:
@@ -679,20 +907,20 @@ async def find_by_number(message: Message, state: FSMContext):
         return
 
     for r in matches:
-        # A=0 Дата, B=1 Кто, C=2 Комплекс, D=3 Инв.номер, E=4 Категория,
-        # F=5 Состояние, G=6 Описание, H=7 Расположение,
-        # I=8 Фото наклейки, J=9 Фото шильдика, K=10 Фото общего вида
         def col(i: int) -> str:
             return r[i].strip() if i < len(r) and r[i].strip() else "—"
 
         text = (
             f"Найдено: {inv}\n\n"
-            f"Комплекс:   {col(2)}\n"
-            f"Категория:  {col(4)}\n"
-            f"Состояние:  {col(5)}\n"
-            f"Описание:   {col(6)}\n"
-            f"Дата:       {col(0)}\n"
-            f"Кто вносил: {col(1)}\n"
+            f"Комплекс:     {col(2)}\n"
+            f"Категория:    {col(4)}\n"
+            f"Подкатегория: {col(11)}\n"
+            f"Тип ТМЦ:      {col(12)}\n"
+            f"Модель:       {col(13)}\n"
+            f"Состояние:    {col(5)}\n"
+            f"Описание:     {col(6)}\n"
+            f"Дата:         {col(0)}\n"
+            f"Кто вносил:   {col(1)}\n"
         )
         links = [col(8), col(9), col(10)]
         links = [l for l in links if l != "—"]
@@ -745,7 +973,7 @@ async def move_inv(message: Message, state: FSMContext):
     current = await _get_current_location(inv)
     if current is None:
         await message.answer(
-            f"⚠️ Оборудование с номером <b>{inv}</b> не найдено в таблице.\n\n"
+            f"Оборудование с номером <b>{inv}</b> не найдено в таблице.\n\n"
             "Введите другой номер или /cancel для отмены.",
             parse_mode="HTML",
         )
@@ -770,7 +998,7 @@ async def move_from(cb: CallbackQuery, state: FSMContext):
 
     if current and current != from_complex:
         await cb.message.answer(
-            f"⚠️ Оборудование <b>{data.get('inv_number')}</b> числится "
+            f"Оборудование <b>{data.get('inv_number')}</b> числится "
             f"на комплексе «<b>{current}</b>», а не «{from_complex}».\n\n"
             "Выберите правильный комплекс:",
             parse_mode="HTML",
@@ -915,7 +1143,7 @@ async def wo_inv(message: Message, state: FSMContext):
     info = await asyncio.to_thread(_lookup)
     if info is None:
         await message.answer(
-            f"⚠️ Оборудование с номером <b>{inv}</b> не найдено.\n\n"
+            f"Оборудование с номером <b>{inv}</b> не найдено.\n\n"
             "Введите другой номер или /cancel для отмены.",
             parse_mode="HTML",
         )
@@ -923,7 +1151,7 @@ async def wo_inv(message: Message, state: FSMContext):
 
     if info["condition"] == "Списано":
         await message.answer(
-            f"⚠️ Оборудование <b>{inv}</b> уже списано.\n\n"
+            f"Оборудование <b>{inv}</b> уже списано.\n\n"
             "Введите другой номер или /cancel для отмены.",
             parse_mode="HTML",
         )

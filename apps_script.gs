@@ -26,7 +26,8 @@ var SHEET_WRITEOFFS = 'Акты списания';       // лист с акта
 // Индексы столбцов листа "Оборудование" (1-based для Sheets API)
 // A=1 Дата, B=2 Кто вносил, C=3 Комплекс, D=4 Инв.номер,
 // E=5 Категория, F=6 Состояние, G=7 Описание,
-// H=8 Расположение (пусто), I=9 Фото наклейки, J=10 Шильдик, K=11 Общий вид
+// H=8 Расположение (пусто), I=9 Фото наклейки, J=10 Шильдик, K=11 Общий вид,
+// L=12 Подкатегория, M=13 Тип ТМЦ, N=14 Модель
 var COL_EQ_CONDITION = 6;   // столбец F (Состояние) — для операции writeoff
 var COL_EQ_INV       = 4;   // столбец D (Инв.номер) — для поиска при writeoff
 
@@ -72,7 +73,8 @@ function getSpreadsheet() {
 }
 
 // ── Добавление оборудования ───────────────────────────────────────────────────
-// payload: { action, complex, inv, category, condition, desc, ph1, ph2, ph3 }
+// payload: { action, user, complex, inv, category, subcat, type_tmc, model,
+//            condition, desc, ph1, ph2, ph3 }
 
 function addEquipment(p) {
   var ss    = getSpreadsheet();
@@ -92,20 +94,23 @@ function addEquipment(p) {
   }
 
   var now  = Utilities.formatDate(new Date(), 'Europe/Moscow', 'yyyy-MM-dd HH:mm');
-  var user = Session.getActiveUser().getEmail() || 'dashboard';
+  var user = p.user || Session.getActiveUser().getEmail() || 'dashboard';
 
   var row = [
-    now,
-    user,
-    p.complex   || '',
-    p.inv       || '',
-    p.category  || '',
-    p.condition || '',
-    p.desc      || '',
-    '',              // H: Расположение внутри объекта — не собираем
-    p.ph1       || '',
-    p.ph2       || '',
-    p.ph3       || '',
+    now,                   // A: Дата
+    user,                  // B: Кто вносил
+    p.complex   || '',     // C: Комплекс
+    p.inv       || '',     // D: Инв.номер
+    p.category  || '',     // E: Категория
+    p.condition || '',     // F: Состояние
+    p.desc      || '',     // G: Описание
+    '',                    // H: Расположение (не собираем)
+    p.ph1       || '',     // I: Фото наклейки
+    p.ph2       || '',     // J: Фото шильдика
+    p.ph3       || '',     // K: Фото общего вида
+    p.subcat    || '',     // L: Подкатегория
+    p.type_tmc  || '',     // M: Тип ТМЦ
+    p.model     || '',     // N: Модель
   ];
 
   sheet.appendRow(row);
@@ -113,7 +118,7 @@ function addEquipment(p) {
 }
 
 // ── Добавление перемещения ────────────────────────────────────────────────────
-// payload: { action, inv, from, to, reason, note }
+// payload: { action, user, inv, from, to, reason, note }
 
 function addMovement(p) {
   var ss    = getSpreadsheet();
@@ -121,7 +126,7 @@ function addMovement(p) {
   if (!sheet) throw new Error('Лист "' + SHEET_MOVEMENTS + '" не найден');
 
   var now  = Utilities.formatDate(new Date(), 'Europe/Moscow', 'yyyy-MM-dd HH:mm');
-  var user = Session.getActiveUser().getEmail() || 'dashboard';
+  var user = p.user || Session.getActiveUser().getEmail() || 'dashboard';
 
   var row = [
     now,
@@ -204,5 +209,9 @@ function writeoff(p) {
   // Обновляем статус в "Оборудование" → "Списано"
   eqSheet.getRange(eqRow, COL_EQ_CONDITION).setValue('Списано');
 
-  return { status: 'ok', message: 'Акт ' + actNum + ' оформлен. Оборудование ' + p.inv + ' списано.' };
+  return {
+    status: 'ok',
+    actNumber: actNum,
+    message: 'Акт ' + actNum + ' оформлен. Оборудование ' + p.inv + ' списано.'
+  };
 }
