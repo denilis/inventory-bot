@@ -80,7 +80,7 @@ GOOGLE_SCOPES = [
 
 # Справочники
 SPORT_COMPLEXES = [
-    "Остров", "Маяк", "Юрловский", "Косино", "Арктика", "Янтарь",
+    "Остров", "Маяк", "Юрловский", "Косино", "Арктика", "Янтарь", "Офис",
 ]
 
 # Иерархические категории: категория → [подкатегории]
@@ -114,6 +114,37 @@ CATEGORIES_TREE = {
 
 CATEGORIES = list(CATEGORIES_TREE.keys())
 
+# Категории БЕЗ шильдика (не электроприборы).
+# Для них нужны только 2 фото: общий вид + наклейка/QR-код.
+# Для остальных — 3 фото: наклейка/QR + шильдик + общий вид.
+CATEGORIES_WITHOUT_NAMEPLATE = {"Мебель", "Инвентарь", "Другое"}
+
+
+def has_nameplate(category: str) -> bool:
+    """True если у категории ожидается шильдик (заводская табличка)."""
+    return category not in CATEGORIES_WITHOUT_NAMEPLATE
+
+
+def photos_needed(category: str) -> int:
+    """Сколько фото должен сделать пользователь для этой категории."""
+    return 3 if has_nameplate(category) else 2
+
+
+def photo_instructions(category: str) -> str:
+    """Текст инструкции по фото под конкретную категорию."""
+    if has_nameplate(category):
+        return (
+            "Нужно 3 фото:\n"
+            "  1. Наклейка / QR-код\n"
+            "  2. Шильдик (заводская табличка)\n"
+            "  3. Общий вид\n"
+        )
+    return (
+        "Нужно 2 фото:\n"
+        "  1. Наклейка / QR-код\n"
+        "  2. Общий вид\n"
+    )
+
 CONDITIONS = [
     "Отличное — работает без замечаний",
     "Рабочее — есть мелкие замечания",
@@ -138,7 +169,7 @@ WRITEOFF_REASONS = [
     "Другое",
 ]
 
-PHOTOS_NEEDED = 3  # наклейка, шильдик, общий вид
+# Количество фото зависит от категории — см. photos_needed() выше.
 
 # ─── Логирование ──────────────────────────────────────────────────────────────
 
@@ -240,12 +271,12 @@ def _save_user(tg_id: int, name: str, b24_id: str, complex_name: str = "") -> No
 
 class Form(StatesGroup):
     choose_complex      = State()   # 1. Выбор комплекса
-    photos              = State()   # 2. Сбор фото (ждём до 3 штук)
-    inv_number          = State()   # 3. Инвентарный номер (обязательный)
-    choose_category     = State()   # 4. Категория
-    choose_subcategory  = State()   # 5. Подкатегория
-    type_tmc            = State()   # 6. Тип ТМЦ (с шильдика)
-    model               = State()   # 7. Модель (с шильдика)
+    choose_category     = State()   # 2. Категория (сначала, чтобы подобрать фото)
+    choose_subcategory  = State()   # 3. Подкатегория
+    photos              = State()   # 4. Сбор фото (2 или 3 шт. в зависимости от категории)
+    inv_number          = State()   # 5. Инвентарный номер (обязательный)
+    type_tmc            = State()   # 6. Тип ТМЦ (только для категорий с шильдиком)
+    model               = State()   # 7. Модель (только для категорий с шильдиком)
     choose_condition    = State()   # 8. Состояние
     description         = State()   # 9. Описание
     confirm             = State()   # Подтверждение
@@ -636,20 +667,22 @@ async def step_complex(cb: CallbackQuery, state: FSMContext):
                             nameplate_data={})
     await cb.message.answer(
         f"Комплекс: {complex_name}\n\n"
-        "Сфотографируйте оборудование — нужно 3 фото:\n"
-        "  1. Наклейка / QR-код\n"
-        "  2. Шильдик (заводская табличка)\n"
-        "  3. Общий вид\n\n"
-        "Отправляйте фото по одному. Когда всё готово — /done\n"
-        "Или /skip чтобы пропустить фото."
+        "Выберите категорию оборудования:",
+        reply_markup=inline_kb(CATEGORIES, "cat"),
     )
-    await state.set_state(Form.photos)
+    await state.set_state(Form.choose_category)
     await cb.answer()
 
 
-# ── Шаг 2: Фото ───────────────────────────────────────────────────────────────
+# ── Шаг 4: Фото ───────────────────────────────────────────────────────────────
 
-PHOTO_LABELS = ["наклейка", "шильдик", "общий_вид"]
+# Метки ячеек в таблице (I/J/K) в зависимости от наличия шильдика.
+PHOTO_LABELS_WITH_NAMEPLATE    = ["наклейка", "шильдик", "общий_вид"]
+PHOTO_LABELS_WITHOUT_NAMEPLATE = ["наклейка", "общий_вид"]
+
+
+def photo_labels_for(category: str) -> list[str]:
+    return PHOTO_LABELS_WITH_NAMEPLATE if has_nameplate(category) else PHOTO_LABELS_WITHOUT_NAMEPLATE
 
 
 @router.message(Form.photos, F.photo)
@@ -658,6 +691,9 @@ async def step_photo(message: Message, state: FSMContext):
     photos: list = data.get("photos", [])
     ocr_done: bool = data.get("ocr_done", False)
     nameplate_data: dict = data.get("nameplate_data", {})
+    category = data.get("category", "")
+    n_needed = photos_needed(category)
+    with_nameplate = has_nameplate(category)
 
     file_id = message.photo[-1].file_id
     photos.append(file_id)
@@ -676,8 +712,9 @@ async def step_photo(message: Message, state: FSMContext):
         if inv_from_ocr:
             await state.update_data(inv_number=inv_from_ocr, ocr_done=True)
 
-    # OCR на втором фото (шильдик) — тип и модель
-    if count == 2 and not nameplate_data:
+    # OCR шильдика (тип и модель) — только для категорий с шильдиком,
+    # и только на 2-м фото (шильдик).
+    if with_nameplate and count == 2 and not nameplate_data:
         try:
             tg_file = await message.bot.get_file(file_id)
             raw = await message.bot.download_file(tg_file.file_path)
@@ -690,18 +727,27 @@ async def step_photo(message: Message, state: FSMContext):
 
     await state.update_data(photos=photos, ocr_done=ocr_done or bool(inv_from_ocr))
 
-    if count < PHOTOS_NEEDED:
-        remaining = PHOTOS_NEEDED - count
-        status = f"Фото {count} из {PHOTOS_NEEDED} получено."
+    if count < n_needed:
+        remaining = n_needed - count
+        status = f"Фото {count} из {n_needed} получено."
         if inv_from_ocr:
             status += f" Номер считан: {inv_from_ocr}"
-        if count == 2 and nameplate_data:
+        if with_nameplate and count == 2 and nameplate_data:
             np_type = nameplate_data.get("type_tmc", "")
             np_model = nameplate_data.get("model", "")
             if np_type or np_model:
                 status += f"\nС шильдика: {np_type} {np_model}".strip()
+        # Подсказка какое следующее фото ожидается
+        next_hint = ""
+        if with_nameplate:
+            next_labels = ["шильдик (заводская табличка)", "общий вид"]
+            if count - 1 < len(next_labels):
+                next_hint = f"\nСледующее фото: {next_labels[count - 1]}."
+        else:
+            if count == 1:
+                next_hint = "\nСледующее фото: общий вид."
         await message.answer(
-            f"{status}\n"
+            f"{status}{next_hint}\n"
             f"Осталось фото: {remaining}. Продолжайте или /done."
         )
     else:
@@ -781,7 +827,7 @@ async def step_inv_ok(message: Message, state: FSMContext):
             parse_mode="HTML",
         )
         return
-    await _ask_category(message, state)
+    await _after_inv_number(message, state)
 
 
 @router.message(Form.inv_number)
@@ -798,18 +844,22 @@ async def step_inv_number(message: Message, state: FSMContext):
         )
         return  # остаёмся в состоянии Form.inv_number
     await state.update_data(inv_number=inv)
-    await _ask_category(message, state)
+    await _after_inv_number(message, state)
 
 
-async def _ask_category(message: Message, state: FSMContext):
-    await message.answer(
-        "Выберите категорию оборудования:",
-        reply_markup=inline_kb(CATEGORIES, "cat"),
-    )
-    await state.set_state(Form.choose_category)
+async def _after_inv_number(message: Message, state: FSMContext):
+    """После инв. номера — либо тип ТМЦ/модель (с шильдиком), либо сразу состояние."""
+    data = await state.get_data()
+    cat = data.get("category", "")
+    if has_nameplate(cat):
+        await _ask_type_tmc(message, state)
+    else:
+        # Для мебели/инвентаря тип и модель не заполняем
+        await state.update_data(type_tmc="—", model="—")
+        await _ask_condition(message, state)
 
 
-# ── Шаг 4: Категория ──────────────────────────────────────────────────────────
+# ── Шаг 2: Категория ──────────────────────────────────────────────────────────
 
 @router.callback_query(Form.choose_category, F.data.startswith("cat:"))
 async def step_category(cb: CallbackQuery, state: FSMContext):
@@ -821,7 +871,7 @@ async def step_category(cb: CallbackQuery, state: FSMContext):
     if len(subcats) == 1 and subcats[0] == "Другое":
         # Единственная подкатегория — пропускаем выбор
         await state.update_data(subcategory="Другое")
-        await _ask_type_tmc(cb.message, state)
+        await _ask_photos(cb.message, state)
     else:
         await cb.message.answer(
             f"Категория: {cat}\n\nВыберите подкатегорию:",
@@ -831,7 +881,7 @@ async def step_category(cb: CallbackQuery, state: FSMContext):
     await cb.answer()
 
 
-# ── Шаг 5: Подкатегория ─────────────────────────────────────────────────────
+# ── Шаг 3: Подкатегория ─────────────────────────────────────────────────────
 
 @router.callback_query(Form.choose_subcategory, F.data.startswith("subcat:"))
 async def step_subcategory(cb: CallbackQuery, state: FSMContext):
@@ -841,8 +891,27 @@ async def step_subcategory(cb: CallbackQuery, state: FSMContext):
     subcats = CATEGORIES_TREE.get(cat, ["Другое"])
     subcat = subcats[idx] if idx < len(subcats) else "Другое"
     await state.update_data(subcategory=subcat)
-    await _ask_type_tmc(cb.message, state)
+    await _ask_photos(cb.message, state)
     await cb.answer()
+
+
+# ── Шаг 4: Подсказка по фото ────────────────────────────────────────────────
+
+async def _ask_photos(message: Message, state: FSMContext):
+    data = await state.get_data()
+    cat = data.get("category", "")
+    subcat = data.get("subcategory", "")
+    n_photos = photos_needed(cat)
+    instructions = photo_instructions(cat)
+
+    text = (
+        f"Категория: {cat}" + (f" / {subcat}" if subcat and subcat != cat else "") + "\n\n"
+        f"Сфотографируйте оборудование. {instructions}\n"
+        "Отправляйте фото по одному. Когда всё готово — /done\n"
+        "Или /skip чтобы пропустить фото."
+    )
+    await message.answer(text)
+    await state.set_state(Form.photos)
 
 
 # ── Шаг 6: Тип ТМЦ ──────────────────────────────────────────────────────────
@@ -1008,15 +1077,26 @@ async def step_confirm_yes(cb: CallbackQuery, state: FSMContext, bot: Bot):
     inv = data.get("inv_number", "NO-NUM")
     photos: list = data.get("photos", [])
 
-    # Загружаем фото в Б24 Диск, собираем ссылки
+    # Загружаем фото в Б24 Диск.
+    # Порядок ячеек в таблице: I=Наклейка, J=Шильдик, K=Общий вид.
+    # - С шильдиком (3 фото): photo_links[0]=наклейка, [1]=шильдик, [2]=общий вид
+    # - Без шильдика (2 фото): photo_links[0]=наклейка, [1]="", [2]=общий вид
+    category = data.get("category", "")
+    with_nameplate = has_nameplate(category)
+    labels = photo_labels_for(category)
+
     photo_links = ["", "", ""]
-    labels = PHOTO_LABELS + [f"фото_{i+1}" for i in range(max(0, len(photos) - len(PHOTO_LABELS)))]
-    for i, fid in enumerate(photos[:3]):
+    for i, fid in enumerate(photos[:len(labels)]):
         label = labels[i] if i < len(labels) else f"фото_{i+1}"
         try:
             filename = f"{inv}_{label}_{now.replace(':', '-')}.jpg"
             link = await upload_to_bitrix(bot, fid, filename)
-            photo_links[i] = link
+            # Для категорий без шильдика 2-е фото — это «общий вид», а не «шильдик»
+            if with_nameplate:
+                photo_links[i] = link
+            else:
+                # [0]=наклейка → I, [1]=общий вид → K (шильдик пуст)
+                photo_links[0 if i == 0 else 2] = link
         except Exception as e:
             log.error(f"Загрузка фото {label}: {e}")
 
@@ -1029,12 +1109,12 @@ async def step_confirm_yes(cb: CallbackQuery, state: FSMContext, bot: Bot):
         user_name,
         data.get("complex", ""),
         inv,
-        data.get("category", ""),
+        category,
         data.get("condition", ""),
         data.get("description", ""),
         "",               # H: Расположение внутри объекта — не собираем
         photo_links[0],   # I: Фото наклейки
-        photo_links[1],   # J: Фото шильдика
+        photo_links[1],   # J: Фото шильдика (пусто для мебели/инвентаря)
         photo_links[2],   # K: Фото общего вида
         data.get("subcategory", ""),   # L: Подкатегория
         data.get("type_tmc", ""),      # M: Тип ТМЦ

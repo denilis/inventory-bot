@@ -128,6 +128,60 @@
   .info-box { background: var(--card); border: 1px solid var(--border); border-radius: var(--radius); padding: 14px 18px; font-size: 13px; color: var(--muted); margin-bottom: 16px; }
   .info-box strong { color: var(--text); }
   .section-title { font-size: 12px; color: var(--muted); text-transform: uppercase; letter-spacing: .5px; margin-bottom: 10px; }
+
+  /* ── Lightbox (просмотр фото) ── */
+  .lb-overlay {
+    position: fixed; inset: 0; background: rgba(0,0,0,.88);
+    display: none; align-items: center; justify-content: center;
+    z-index: 9999; padding: 40px;
+    animation: lb-fade-in .15s ease-out;
+  }
+  .lb-overlay.open { display: flex; }
+  @keyframes lb-fade-in { from { opacity: 0; } to { opacity: 1; } }
+  .lb-content {
+    position: relative; max-width: 100%; max-height: 100%;
+    display: flex; flex-direction: column; align-items: center; gap: 14px;
+  }
+  .lb-img, .lb-frame {
+    max-width: calc(100vw - 120px); max-height: calc(100vh - 180px);
+    border-radius: var(--radius); box-shadow: 0 8px 40px rgba(0,0,0,.6);
+    background: #000;
+  }
+  .lb-img { object-fit: contain; }
+  .lb-frame {
+    width: min(900px, calc(100vw - 120px));
+    height: calc(100vh - 180px);
+    border: 0;
+    background: #fff;
+  }
+  .lb-img[hidden], .lb-frame[hidden] { display: none !important; }
+  .lb-caption {
+    color: #e8eaf0; font-size: 14px; text-align: center;
+    background: rgba(0,0,0,.45); padding: 8px 16px; border-radius: var(--radius);
+    max-width: 80vw;
+  }
+  .lb-caption .lb-counter { color: var(--muted); margin-left: 8px; font-size: 12px; }
+  .lb-caption a { color: var(--accent); text-decoration: none; margin-left: 12px; font-size: 12px; }
+  .lb-caption a:hover { text-decoration: underline; }
+  .lb-btn {
+    position: absolute; background: rgba(36,40,48,.85); color: #fff;
+    border: 1px solid var(--border); border-radius: 50%;
+    width: 44px; height: 44px; cursor: pointer;
+    font-size: 22px; line-height: 1; display: flex; align-items: center; justify-content: center;
+    transition: background .15s, transform .1s;
+  }
+  .lb-btn:hover { background: var(--accent); }
+  .lb-btn:active { transform: scale(.95); }
+  .lb-close { top: -22px; right: -22px; font-size: 20px; }
+  .lb-prev  { left: -70px; top: 50%; transform: translateY(-50%); }
+  .lb-next  { right: -70px; top: 50%; transform: translateY(-50%); }
+  .lb-prev:active, .lb-next:active { transform: translateY(-50%) scale(.95); }
+  @media (max-width: 768px) {
+    .lb-prev  { left: 8px; }
+    .lb-next  { right: 8px; }
+    .lb-close { top: 8px; right: 8px; }
+    .lb-img   { max-width: calc(100vw - 30px); max-height: calc(100vh - 160px); }
+  }
 </style>
 </head>
 <body>
@@ -154,7 +208,7 @@ const CFG = {
   mv: { date:0, user:1, inv:2, from:3, to:4, reason:5, note:6 },
 };
 
-const COMPLEXES = ['Остров','Маяк','Юрловский','Косино','Арктика','Янтарь'];
+const COMPLEXES = ['Остров','Маяк','Юрловский','Косино','Арктика','Янтарь','Офис'];
 
 // Иерархические категории: Категория → Подкатегории
 const CATEGORIES_TREE = {
@@ -527,7 +581,7 @@ const WRITEOFF_REASONS = [
     <div class="help-section">
       <h3>10. Спортивные комплексы</h3>
       <p>В системе зарегистрированы объекты:</p>
-      <p><strong>Остров</strong>, <strong>Маяк</strong>, <strong>Юрловский</strong>, <strong>Косино</strong>, <strong>Арктика</strong>, <strong>Янтарь</strong></p>
+      <p><strong>Остров</strong>, <strong>Маяк</strong>, <strong>Юрловский</strong>, <strong>Косино</strong>, <strong>Арктика</strong>, <strong>Янтарь</strong>, <strong>Офис</strong></p>
     </div>
 
     <div class="help-section">
@@ -736,11 +790,15 @@ function renderTable() {
   const tbody = pageRows.map(r => {
     const c  = CFG.eq;
     const get = i => escHtml(r[i] || '');
-    const photos = [r[c.ph1], r[c.ph2], r[c.ph3]].filter(Boolean);
-    const photoHtml = photos.map((u, i) => {
-      const lbl = ['наклейка','шильдик','общий'];
-      return '<a href="' + escHtml(u) + '" target="_blank">' + (lbl[i] || 'фото') + '</a>';
-    }).join('');
+    // Ссылки на фото открываем в lightbox (см. функцию lbOpen внизу файла)
+    const LBL = ['наклейка','шильдик','общий'];
+    const rawPhotos = [r[c.ph1], r[c.ph2], r[c.ph3]];
+    const photoItems = [];
+    rawPhotos.forEach((u, i) => { if (u) photoItems.push({ url: u, label: LBL[i] || 'фото' }); });
+    const photosAttr = escHtml(JSON.stringify(photoItems));
+    const photoHtml = photoItems.map((it, i) =>
+      '<a href="' + escHtml(it.url) + '" class="lb-link" data-photos="' + photosAttr + '" data-index="' + i + '">' + escHtml(it.label) + '</a>'
+    ).join('');
 
     // Категория + подкатегория
     const catFull = get(c.cat) + (r[c.subcat] ? ' — ' + get(c.subcat) : '');
@@ -986,6 +1044,111 @@ function toast(msg, type) {
   clearTimeout(toastTimer);
   toastTimer = setTimeout(() => { el.className = ''; }, 3500);
 }
+
+// ═══════════════════════════════════════════════════════════════════════════
+//   Lightbox для фото
+// ═══════════════════════════════════════════════════════════════════════════
+
+const LB = { items: [], index: 0 };
+
+function lbOpen(items, startIndex) {
+  LB.items = items || [];
+  LB.index = startIndex || 0;
+  if (!LB.items.length) return;
+  lbRender();
+  document.getElementById('lbOverlay').classList.add('open');
+  document.body.style.overflow = 'hidden';
+}
+
+function lbClose() {
+  document.getElementById('lbOverlay').classList.remove('open');
+  document.body.style.overflow = '';
+}
+
+function lbPrev() {
+  if (!LB.items.length) return;
+  LB.index = (LB.index - 1 + LB.items.length) % LB.items.length;
+  lbRender();
+}
+
+function lbNext() {
+  if (!LB.items.length) return;
+  LB.index = (LB.index + 1) % LB.items.length;
+  lbRender();
+}
+
+function lbRender() {
+  const it = LB.items[LB.index];
+  if (!it) return;
+  const img   = document.getElementById('lbImg');
+  const frame = document.getElementById('lbFrame');
+
+  // По умолчанию — пытаемся показать <img>. Если она не загрузится
+  // (Битрикс24 shared-link отдаёт HTML вместо картинки), сработает
+  // lbOnImgError() и переключит на <iframe>.
+  frame.hidden = true;
+  frame.src    = 'about:blank';
+  img.hidden   = false;
+  img.src      = it.url;
+  img.alt      = it.label || '';
+
+  const cap = document.getElementById('lbCaption');
+  cap.innerHTML =
+    '<strong>' + escHtml(it.label || 'фото') + '</strong>' +
+    '<span class="lb-counter">' + (LB.index + 1) + ' / ' + LB.items.length + '</span>' +
+    '<a href="' + escHtml(it.url) + '" target="_blank" rel="noopener">открыть в новой вкладке</a>';
+}
+
+function lbOnImgError() {
+  // Файл не удалось отрендерить как картинку — показываем страницу во фрейме.
+  const it = LB.items[LB.index];
+  if (!it) return;
+  const img   = document.getElementById('lbImg');
+  const frame = document.getElementById('lbFrame');
+  img.hidden   = true;
+  frame.hidden = false;
+  frame.src    = it.url;
+}
+
+// Открытие по клику на ссылку в таблице
+document.addEventListener('click', function(e) {
+  const a = e.target.closest('a.lb-link');
+  if (!a) return;
+  e.preventDefault();
+  let items;
+  try { items = JSON.parse(a.getAttribute('data-photos') || '[]'); }
+  catch (_) { items = []; }
+  const idx = parseInt(a.getAttribute('data-index') || '0', 10) || 0;
+  lbOpen(items, idx);
+});
+
+// Клик по оверлею (но не по картинке) — закрыть
+document.addEventListener('click', function(e) {
+  const overlay = document.getElementById('lbOverlay');
+  if (!overlay || !overlay.classList.contains('open')) return;
+  if (e.target === overlay) lbClose();
+});
+
+// Клавиатурная навигация
+document.addEventListener('keydown', function(e) {
+  const overlay = document.getElementById('lbOverlay');
+  if (!overlay || !overlay.classList.contains('open')) return;
+  if (e.key === 'Escape') lbClose();
+  else if (e.key === 'ArrowLeft') lbPrev();
+  else if (e.key === 'ArrowRight') lbNext();
+});
 </script>
+
+<!-- Lightbox overlay -->
+<div class="lb-overlay" id="lbOverlay" role="dialog" aria-modal="true">
+  <div class="lb-content">
+    <img class="lb-img" id="lbImg" alt="" onerror="lbOnImgError()">
+    <iframe class="lb-frame" id="lbFrame" hidden referrerpolicy="no-referrer"></iframe>
+    <div class="lb-caption" id="lbCaption"></div>
+    <button class="lb-btn lb-close" type="button" onclick="lbClose()" aria-label="Закрыть">×</button>
+    <button class="lb-btn lb-prev"  type="button" onclick="lbPrev()"  aria-label="Назад">‹</button>
+    <button class="lb-btn lb-next"  type="button" onclick="lbNext()"  aria-label="Вперёд">›</button>
+  </div>
+</div>
 </body>
 </html>
