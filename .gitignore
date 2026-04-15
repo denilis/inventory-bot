@@ -33,3 +33,11 @@ nul-
 
 # Yandex Disk sync copies
 *(копия с компьютера*
+
+# Windows folder metadata (Google Drive / проводник кладёт это везде)
+desktop.ini
+Thumbs.db
+
+# Логи
+bot.log
+*.log

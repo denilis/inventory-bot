@@ -220,34 +220,75 @@ def _open_eq_sheet() -> gspread.Worksheet:
     return sh.worksheet(SHEET_EQUIPMENT)
 
 
+def _find_or_create_worksheet(sh, title: str, rows: int, cols: int,
+                               header: list[str]) -> gspread.Worksheet:
+    """Ищет лист по имени среди всех имеющихся; если не найдёт — создаёт.
+
+    Устойчивее чем try/except на WorksheetNotFound: защищает от параллельных
+    вызовов (race condition) и от сетевых APIError, при которых старый код
+    пытался создать уже существующий лист и падал.
+
+    Поиск предпочитает точное совпадение, но если его нет — берёт первый
+    лист, у которого имя после strip() и lower() совпадает (игнорирует
+    возможные невидимые пробелы). Листы-дубликаты с суффиксом `_conflict`
+    (создаются Google при одновременном редактировании) игнорируются.
+    """
+    try:
+        all_ws = sh.worksheets()
+    except Exception:
+        all_ws = []
+    target_norm = title.strip().casefold()
+    exact = None
+    fuzzy = None
+    for ws in all_ws:
+        t = ws.title
+        if "_conflict" in t:
+            continue
+        if t == title:
+            exact = ws
+            break
+        if t.strip().casefold() == target_norm and fuzzy is None:
+            fuzzy = ws
+    found = exact or fuzzy
+    if found is not None:
+        return found
+    # Реально нет листа — создаём
+    try:
+        ws = sh.add_worksheet(title=title, rows=rows, cols=cols)
+        ws.append_row(header)
+        return ws
+    except gspread.exceptions.APIError:
+        # Гонка — лист создал кто-то параллельно. Перечитываем.
+        for ws in sh.worksheets():
+            if ws.title == title or ws.title.strip().casefold() == target_norm:
+                return ws
+        raise
+
+
 def _open_writeoff_sheet() -> gspread.Worksheet:
     """Открывает лист актов списания. Создаёт с заголовками если не существует."""
     gc = gspread.authorize(_get_google_creds())
     sh = gc.open_by_key(SPREADSHEET_ID)
-    try:
-        return sh.worksheet(SHEET_WRITEOFFS)
-    except gspread.exceptions.WorksheetNotFound:
-        ws = sh.add_worksheet(title=SHEET_WRITEOFFS, rows=1000, cols=14)
-        ws.append_row([
+    return _find_or_create_worksheet(
+        sh, SHEET_WRITEOFFS, rows=1000, cols=14,
+        header=[
             "Дата", "№ Акта", "Инв.номер", "Комплекс",
             "Категория", "Причина списания", "Описание",
             "Кто списывает", "Фото оборудования",
             "Статус", "Дата подтв.1", "Дата подтв.2",
             "Комм.отклонения", "TG ID инициатора",
-        ])
-        return ws
+        ],
+    )
 
 
 def _open_users_sheet() -> gspread.Worksheet:
     """Открывает или создаёт лист «Пользователи»."""
     gc = gspread.authorize(_get_google_creds())
     sh = gc.open_by_key(SPREADSHEET_ID)
-    try:
-        return sh.worksheet(SHEET_USERS)
-    except gspread.exceptions.WorksheetNotFound:
-        ws = sh.add_worksheet(title=SHEET_USERS, rows=500, cols=5)
-        ws.append_row(["TG ID", "ФИО", "B24 ID", "Комплекс", "Дата регистрации"])
-        return ws
+    return _find_or_create_worksheet(
+        sh, SHEET_USERS, rows=500, cols=5,
+        header=["TG ID", "ФИО", "B24 ID", "Комплекс", "Дата регистрации"],
+    )
 
 
 def _get_user_by_tg_id(tg_id: int) -> dict | None:
@@ -463,9 +504,24 @@ async def _suggest_next_inv() -> str:
 
 async def _ensure_auth(message: Message, state: FSMContext,
                        after_action: str = "") -> dict | None:
-    """Проверяет регистрацию пользователя.
-    Если пользователь известен — возвращает его данные.
-    Если нет — запускает RegisterForm и возвращает None."""
+    """ВРЕМЕННО: регистрация отключена, пока восстанавливаем систему.
+    Все пользователи пускаются, «Кто вносил» = имя из Telegram-профиля.
+    Новая auth (логин/пароль + роли) делается в отдельной ветке develop.
+    """
+    u = message.from_user
+    return {
+        "tg_id":   str(u.id),
+        "name":    u.full_name or u.username or str(u.id),
+        "b24_id":  "",
+        "complex": "",
+    }
+
+
+async def _ensure_auth_DISABLED_SEE_DEVELOP(message: Message, state: FSMContext,
+                       after_action: str = "") -> dict | None:
+    """СТАРАЯ логика регистрации через Битрикс24 — сохранена для референса.
+    Не вызывается. Заменена на _ensure_auth выше.
+    """
     tg_id = message.from_user.id
     user_data = await asyncio.to_thread(_get_user_by_tg_id, tg_id)
     if user_data:
